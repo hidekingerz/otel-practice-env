@@ -63,6 +63,18 @@ services:
     networks:
       - otel-network
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - otel-network
+
 volumes:
   grafana-data:
   mariadb-data:
