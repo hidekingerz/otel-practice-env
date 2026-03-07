@@ -39,6 +39,26 @@ services:
       - mariadb-data:/var/lib/mysql
     networks:
       - otel-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    environment:
+      DB_DSN: "appuser:apppassword@tcp(db:3306)/app?parseTime=true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - otel-network
 
 volumes:
   grafana-data:
