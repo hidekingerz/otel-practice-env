@@ -4,13 +4,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/hidekingerz/otel-practice-env/backend/db"
 )
+
+var tracer = otel.Tracer("backend/handler")
 
 type Todo struct {
 	ID        int64     `json:"id"`
@@ -32,14 +38,19 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("writeJSON: %v", err)
+		slog.Error("writeJSON", "error", err)
 	}
 }
 
 func (h *TodoHandler) List(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.QueryContext(r.Context(), "SELECT id, title, completed, created_at, updated_at FROM todos ORDER BY id DESC")
+	ctx, span := tracer.Start(r.Context(), "todo.List")
+	defer span.End()
+
+	rows, err := h.db.QueryContext(ctx, "SELECT id, title, completed, created_at, updated_at FROM todos ORDER BY id DESC")
 	if err != nil {
-		log.Printf("List query: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "List query failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -49,16 +60,24 @@ func (h *TodoHandler) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var t Todo
 		if err := rows.Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			log.Printf("List scan: %v", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			slog.ErrorContext(ctx, "List scan failed", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 			return
 		}
 		todos = append(todos, t)
 	}
+
+	span.SetAttributes(attribute.Int("todo.count", len(todos)))
+	slog.InfoContext(ctx, "listed todos", "count", len(todos))
 	writeJSON(w, http.StatusOK, todos)
 }
 
 func (h *TodoHandler) Create(w http.ResponseWriter, r *http.Request) {
+	ctx, span := tracer.Start(r.Context(), "todo.Create")
+	defer span.End()
+
 	var req struct {
 		Title string `json:"title"`
 	}
@@ -67,30 +86,44 @@ func (h *TodoHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.db.ExecContext(r.Context(), "INSERT INTO todos (title) VALUES (?)", req.Title)
+	span.SetAttributes(attribute.String("todo.title", req.Title))
+
+	result, err := h.db.ExecContext(ctx, "INSERT INTO todos (title) VALUES (?)", req.Title)
 	if err != nil {
-		log.Printf("Create exec: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "Create exec failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
 	id, _ := result.LastInsertId()
+	span.SetAttributes(attribute.Int64("todo.id", id))
+
 	var t Todo
-	if err := h.db.QueryRowContext(r.Context(), "SELECT id, title, completed, created_at, updated_at FROM todos WHERE id = ?", id).
+	if err := h.db.QueryRowContext(ctx, "SELECT id, title, completed, created_at, updated_at FROM todos WHERE id = ?", id).
 		Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt, &t.UpdatedAt); err != nil {
-		log.Printf("Create fetch: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "Create fetch failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
+
+	slog.InfoContext(ctx, "created todo", "id", t.ID, "title", t.Title)
 	writeJSON(w, http.StatusCreated, t)
 }
 
 func (h *TodoHandler) Update(w http.ResponseWriter, r *http.Request) {
+	ctx, span := tracer.Start(r.Context(), "todo.Update")
+	defer span.End()
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
 		return
 	}
+	span.SetAttributes(attribute.Int64("todo.id", id))
 
 	var req struct {
 		Title     *string `json:"title"`
@@ -102,13 +135,15 @@ func (h *TodoHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var t Todo
-	err = h.db.QueryRowContext(r.Context(), "SELECT id, title, completed, created_at, updated_at FROM todos WHERE id = ?", id).
+	err = h.db.QueryRowContext(ctx, "SELECT id, title, completed, created_at, updated_at FROM todos WHERE id = ?", id).
 		Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt, &t.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	} else if err != nil {
-		log.Printf("Update fetch: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "Update fetch failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -120,32 +155,44 @@ func (h *TodoHandler) Update(w http.ResponseWriter, r *http.Request) {
 		t.Completed = *req.Completed
 	}
 
-	_, err = h.db.ExecContext(r.Context(), "UPDATE todos SET title = ?, completed = ? WHERE id = ?", t.Title, t.Completed, t.ID)
+	_, err = h.db.ExecContext(ctx, "UPDATE todos SET title = ?, completed = ? WHERE id = ?", t.Title, t.Completed, t.ID)
 	if err != nil {
-		log.Printf("Update exec: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "Update exec failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	if err := h.db.QueryRowContext(r.Context(), "SELECT id, title, completed, created_at, updated_at FROM todos WHERE id = ?", id).
+	if err := h.db.QueryRowContext(ctx, "SELECT id, title, completed, created_at, updated_at FROM todos WHERE id = ?", id).
 		Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt, &t.UpdatedAt); err != nil {
-		log.Printf("Update re-fetch: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "Update re-fetch failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
+
+	slog.InfoContext(ctx, "updated todo", "id", t.ID, "completed", t.Completed)
 	writeJSON(w, http.StatusOK, t)
 }
 
 func (h *TodoHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	ctx, span := tracer.Start(r.Context(), "todo.Delete")
+	defer span.End()
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
 		return
 	}
+	span.SetAttributes(attribute.Int64("todo.id", id))
 
-	result, err := h.db.ExecContext(r.Context(), "DELETE FROM todos WHERE id = ?", id)
+	result, err := h.db.ExecContext(ctx, "DELETE FROM todos WHERE id = ?", id)
 	if err != nil {
-		log.Printf("Delete exec: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "Delete exec failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -155,5 +202,7 @@ func (h *TodoHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
+
+	slog.InfoContext(ctx, "deleted todo", "id", id)
 	w.WriteHeader(http.StatusNoContent)
 }
