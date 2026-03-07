@@ -1,0 +1,49 @@
+services:
+  grafana:
+    image: grafana/otel-lgtm:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"   # Grafana UI
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - otel-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    command: ["--config", "/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "13133:13133" # Health check
+    depends_on:
+      - grafana
+    networks:
+      - otel-network
+
+  db:
+    image: mariadb:latest
+    container_name: mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: app
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mariadb-data:/var/lib/mysql
+    networks:
+      - otel-network
+
+volumes:
+  grafana-data:
+  mariadb-data:
+
+networks:
+  otel-network:
+    driver: bridge
