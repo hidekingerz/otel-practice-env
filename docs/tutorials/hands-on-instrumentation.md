@@ -114,10 +114,13 @@ func (h *TodoHandler) Stats(w http.ResponseWriter, r *http.Request) {
 
 カウンターはファイル先頭でグローバルに定義するのが一般的です（`TodoList.tsx` の `todoCreatedCounter` が参考になります）。
 
-バックエンドでは `go.opentelemetry.io/otel/metric` パッケージを使います。
+バックエンドでは `go.opentelemetry.io/otel/metric` パッケージを使います。`meter` と `statsRequestCounter` はファイル先頭のグローバル変数として定義します。
 
 ```go
-import "go.opentelemetry.io/otel"
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/metric"  // metric.WithDescription のために必要
+)
 
 var meter = otel.Meter("backend/handler")
 
@@ -191,6 +194,8 @@ meter.Int64ObservableGauge(
 ```
 
 ただし、コールバック内でどうやって DB にアクセスするか工夫が必要です（`TodoHandler` のメソッドとして登録するか、クロージャで `h.db` をキャプチャするか）。
+
+また、コールバックの引数 `ctx context.Context` を使うために `"context"` の import も必要です。
 
 ### やってみよう
 
