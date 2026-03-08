@@ -111,20 +111,17 @@
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 10 },
       "id": 3,
       "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "showLabels": false,
-        "showTime": true,
-        "sortOrder": "Descending"
+        "footer": { "show": false },
+        "sortBy": []
       },
       "targets": [
         {
           "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
           "filters": [
-            { "id": "service-name", "operator": "=", "scope": "resource", "tag": "service.name", "value": ["frontend", "backend"], "valueType": "string" }
+            { "id": "service-name", "operator": "=~", "scope": "resource", "tag": "service.name", "value": ["frontend", "backend"], "valueType": "string" }
           ],
           "limit": 20,
-          "queryType": "traceql",
+          "queryType": "traceqlSearch",
           "refId": "A",
           "tableType": "traces"
         }
