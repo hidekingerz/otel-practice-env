@@ -6,6 +6,8 @@ services:
       - "3000:3000"   # Grafana UI
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/dashboards/dashboard.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/otel-practice.yaml:ro
+      - ./grafana/dashboards:/otel-lgtm/dashboards:ro
     networks:
       - otel-network
 
