@@ -38,40 +38,21 @@ docker compose down
 
 ## Grafana での確認
 
-### ダッシュボード（自動プロビジョニング）
+Grafana（http://localhost:3000）を開くと **"OTel Practice - Overview"** ダッシュボードが自動で表示されます。トレース・メトリクス・ログの3シグナルをまとめて確認できます。
 
-Grafana を開くと **"OTel Practice - Overview"** ダッシュボードが自動で表示されます。
-
-- **Frontend Metrics**: Todo 操作回数・API レスポンス時間
-- **Recent Traces**: frontend/backend の最新トレース一覧
-- **Logs**: frontend/backend のリアルタイムログ
-
-### Explore で個別確認
-
-| シグナル | データソース | クエリ例 |
-|---|---|---|
-| Traces | Tempo | `{service.name="frontend"}` または Search タブ |
-| Metrics | Prometheus | `todo_created_total` |
-| Logs | Loki | `{service_name="frontend"}` |
-
-### 分散トレーシングの確認
-
-1. http://localhost で Todo を作成・削除する
-2. Grafana > Explore > Tempo > Search
-3. `Service Name = frontend` でトレース一覧を表示
-4. トレースをクリック → `frontend → backend → db` のウォーターフォールを確認
+詳細な操作手順は [はじめてみよう](docs/tutorials/getting-started.md) を参照してください。
 
 ## フェーズ構成
 
 | Phase | コミット | 内容 |
 |---|---|---|
-| 1 | [c7d25a2](../../commit/c7d25a2) | インフラ基盤 (LGTM + OTel Collector) |
-| 2 | [0e9b41e](../../commit/0e9b41e) | Go バックエンド（素） |
-| 3 | [b254c17](../../commit/b254c17) | Go バックエンド + OTel 計装 |
-| 4 | [ab6d1f6](../../commit/ab6d1f6) | React フロントエンド（素） |
-| 5 | [8b3774b](../../commit/8b3774b) | React + OTel JS SDK・分散トレーシング |
-| 6 | [3e43b87](../../commit/3e43b87) | 手動計装・メトリクス・ログ |
-| 7 | [13d8e9a](../../commit/13d8e9a) | Grafana ダッシュボード・仕上げ |
+| 1 | [c7d25a2](https://github.com/hidekingerz/otel-practice-env/commit/c7d25a2) | インフラ基盤 (LGTM + OTel Collector) |
+| 2 | [0e9b41e](https://github.com/hidekingerz/otel-practice-env/commit/0e9b41e) | Go バックエンド（素） |
+| 3 | [b254c17](https://github.com/hidekingerz/otel-practice-env/commit/b254c17) | Go バックエンド + OTel 計装 |
+| 4 | [ab6d1f6](https://github.com/hidekingerz/otel-practice-env/commit/ab6d1f6) | React フロントエンド（素） |
+| 5 | [8b3774b](https://github.com/hidekingerz/otel-practice-env/commit/8b3774b) | React + OTel JS SDK・分散トレーシング |
+| 6 | [3e43b87](https://github.com/hidekingerz/otel-practice-env/commit/3e43b87) | 手動計装・メトリクス・ログ |
+| 7 | [13d8e9a](https://github.com/hidekingerz/otel-practice-env/commit/13d8e9a) | Grafana ダッシュボード・仕上げ |
 
 ## ドキュメント
 

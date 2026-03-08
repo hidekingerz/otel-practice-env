@@ -8,8 +8,12 @@ graph LR
         React["React SPA<br/>(TypeScript)"]
     end
 
+    subgraph "Frontend Server"
+        nginx["nginx<br/>(localhost:80)"]
+    end
+
     subgraph Backend
-        Go["Go Backend"]
+        Go["Go Backend<br/>(:8080)"]
         DB["MariaDB"]
     end
 
@@ -24,7 +28,8 @@ graph LR
         Grafana["Grafana<br/>(可視化)"]
     end
 
-    React -- "HTTP API" --> Go
+    React -- "HTTP" --> nginx
+    nginx -- "/api プロキシ" --> Go
     Go -- "SQL" --> DB
 
     React -- "OTLP/HTTP<br/>(テレメトリ)" --> Collector
@@ -59,6 +64,8 @@ React SPA  --[OTLP/HTTP]--> OTel Collector --> Mimir --> Grafana
 Go Backend --[OTLP/gRPC]--> OTel Collector --> Mimir --> Grafana
 ```
 
+フロントエンドは `MeterProvider` を通じてカスタムメトリクス（カウンター・ヒストグラム）を生成する。バックエンドも OTel Go SDK の `MeterProvider` で同様にカスタムメトリクスを生成する。収集されたメトリクスは Mimir（Prometheus 互換）に保存され、Grafana の Prometheus データソースからクエリできる。
+
 ### ログ
 
 ```
@@ -66,7 +73,7 @@ React SPA  --[OTLP/HTTP]--> OTel Collector --> Loki --> Grafana
 Go Backend --[OTLP/gRPC]--> OTel Collector --> Loki --> Grafana
 ```
 
-トレース ID との関連付けにより、ログから対応するトレースへのジャンプが可能。
+フロントエンドは `LoggerProvider` を通じて構造化ログを OTel Collector に送信する。バックエンドは `otelslog` ブリッジを使い、標準ライブラリの `slog` によるログを OTel ログとして送信する。ログにはトレース ID とスパン ID が自動付与されるため、Grafana の Loki 画面からそのまま対応するトレースへジャンプできる。
 
 ## 技術選定の理由
 
@@ -77,6 +84,10 @@ Go Backend --[OTLP/gRPC]--> OTel Collector --> Loki --> Grafana
 ### Go（バックエンド）
 
 OTel Go SDK はエコシステムが成熟しており、`otelhttp`（HTTP ハンドラの自動計装）や `otelsql`（SQL クエリの自動計装）など計装ライブラリが充実している。バックエンドの計装パターンを学ぶ対象として適切な選択だった。
+
+### フロントエンドが OTLP/HTTP を使う理由
+
+ブラウザ環境では gRPC（HTTP/2）を直接使用できないため、フロントエンドは OTLP/HTTP を使用している。バックエンドはサーバー間通信であるため gRPC を使用しており、この違いは OTel JS SDK と Go SDK の設定差として現れる。JS SDK では `OTLPTraceExporter` に `http://localhost:4318` を指定し、Go SDK では `otlptracegrpc` で `otel-collector:4317` を指定している。
 
 ### OTel Collector（別コンテナとして分離）
 

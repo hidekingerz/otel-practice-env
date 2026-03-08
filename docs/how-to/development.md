@@ -74,7 +74,7 @@ docker run --rm \
   --config /etc/otel-collector-config.yaml
 ```
 
-> OTel Collector は受信者・処理者・エクスポーターを動的に組み合わせる設計のため、IDE 上でのスキーマ検証はできません。設定変更後はこのコマンドか `docker compose logs otel-collector` でエラーを確認してください。
+> IDE 上でのスキーマ検証はできません。設定変更後はこのコマンドか `docker compose logs otel-collector` でエラーを確認してください。Collector のパイプライン設計については [アーキテクチャと設計思想](../explanation/architecture.md) を参照してください。
 
 ## バックエンドを変更してリビルドする
 
