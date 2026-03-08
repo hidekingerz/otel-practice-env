@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -13,18 +12,11 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 
 	"github.com/hidekingerz/otel-practice-env/backend/db"
 )
 
 var tracer = otel.Tracer("backend/handler")
-var meter = otel.Meter("backend/handler")
-
-var statsRequestCounter, _ = meter.Int64Counter(
-	"todo.stats.requests",
-	metric.WithDescription("Number of requests to the stats endpoint"),
-)
 
 type Todo struct {
 	ID        int64     `json:"id"`
@@ -39,32 +31,7 @@ type TodoHandler struct {
 }
 
 func NewTodoHandler(database *db.DB) *TodoHandler {
-	h := &TodoHandler{db: database}
-
-	// Exercise 3: ゲージ（収集時に DB から件数をプルする）
-	meter.Int64ObservableGauge(
-		"todo.count",
-		metric.WithDescription("Current number of todos by status"),
-		metric.WithInt64Callback(func(ctx context.Context, o metric.Int64Observer) error {
-			var stats TodoStats
-			err := h.db.QueryRowContext(ctx, `
-				SELECT
-					COUNT(*) AS total,
-					SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) AS completed,
-					SUM(CASE WHEN completed = 0 THEN 1 ELSE 0 END) AS pending
-				FROM todos
-			`).Scan(&stats.Total, &stats.Completed, &stats.Pending)
-			if err != nil {
-				return err
-			}
-			o.Observe(int64(stats.Total), metric.WithAttributes(attribute.String("status", "total")))
-			o.Observe(int64(stats.Completed), metric.WithAttributes(attribute.String("status", "completed")))
-			o.Observe(int64(stats.Pending), metric.WithAttributes(attribute.String("status", "pending")))
-			return nil
-		}),
-	)
-
-	return h
+	return &TodoHandler{db: database}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -217,14 +184,11 @@ type TodoStats struct {
 	Pending   int `json:"pending"`
 }
 
-// Stats は GET /api/todos/stats のハンドラ（Exercise 1〜5 完成版）
+// Stats は GET /api/todos/stats のハンドラ
+// NOTE: このハンドラには意図的に OTel 計装を入れていません。
+// ハンズオン練習 (docs/tutorials/hands-on-instrumentation.md) で自分で追加してみましょう。
 func (h *TodoHandler) Stats(w http.ResponseWriter, r *http.Request) {
-	// Exercise 1: 手動スパン
-	ctx, span := tracer.Start(r.Context(), "todo.Stats")
-	defer span.End()
-
-	// Exercise 2: カウンター
-	statsRequestCounter.Add(ctx, 1)
+	ctx := r.Context()
 
 	var stats TodoStats
 	err := h.db.QueryRowContext(ctx, `
@@ -235,26 +199,9 @@ func (h *TodoHandler) Stats(w http.ResponseWriter, r *http.Request) {
 		FROM todos
 	`).Scan(&stats.Total, &stats.Completed, &stats.Pending)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "stats query failed", "error", err) // Exercise 5
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
-
-	// Exercise 1: スパン属性
-	span.SetAttributes(
-		attribute.Int("todo.total", stats.Total),
-		attribute.Int("todo.completed", stats.Completed),
-		attribute.Int("todo.pending", stats.Pending),
-	)
-
-	// Exercise 5: ログ（ctx を渡すことでトレース ID が自動付与される）
-	slog.InfoContext(ctx, "stats requested",
-		"total", stats.Total,
-		"completed", stats.Completed,
-		"pending", stats.Pending,
-	)
 
 	writeJSON(w, http.StatusOK, stats)
 }
