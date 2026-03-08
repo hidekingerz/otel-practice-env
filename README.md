@@ -38,62 +38,28 @@ docker compose down
 
 ## Grafana での確認
 
-### ダッシュボード（自動プロビジョニング）
+Grafana（http://localhost:3000）を開くと **"OTel Practice - Overview"** ダッシュボードが自動で表示されます。トレース・メトリクス・ログの3シグナルをまとめて確認できます。
 
-Grafana を開くと **"OTel Practice - Overview"** ダッシュボードが自動で表示されます。
+詳細な操作手順は [はじめてみよう](docs/tutorials/getting-started.md) を参照してください。
 
-- **Frontend Metrics**: Todo 操作回数・API レスポンス時間
-- **Recent Traces**: frontend/backend の最新トレース一覧
-- **Logs**: frontend/backend のリアルタイムログ
+## フェーズ構成
 
-### Explore で個別確認
-
-| シグナル | データソース | クエリ例 |
+| Phase | コミット | 内容 |
 |---|---|---|
-| Traces | Tempo | `{service.name="frontend"}` または Search タブ |
-| Metrics | Prometheus | `todo_created_total` |
-| Logs | Loki | `{service_name="frontend"}` |
-
-### 分散トレーシングの確認
-
-1. http://localhost で Todo を作成・削除する
-2. Grafana > Explore > Tempo > Search
-3. `Service Name = frontend` でトレース一覧を表示
-4. トレースをクリック → `frontend → backend → db` のウォーターフォールを確認
-
-## フェーズ構成と学習ポイント
-
-| Phase | 内容 | 学習ポイント |
-|---|---|---|
-| 1 | インフラ基盤 (LGTM + OTel Collector) | Grafana LGTM スタック、Collector のパイプライン設定 |
-| 2 | Go バックエンド（素） | net/http + database/sql の基本実装 |
-| 3 | Go バックエンド + OTel | TracerProvider / MeterProvider / LoggerProvider の初期化、otelhttp / otelsql 自動計装 |
-| 4 | React フロントエンド（素） | Vite + React、nginx リバースプロキシ |
-| 5 | React + OTel JS SDK | WebTracerProvider、FetchInstrumentation による **分散トレーシング** |
-| 6 | 手動計装・3シグナル | 手動スパン・カスタムメトリクス・ログの実装 |
-| 7 | ダッシュボード・仕上げ | Grafana プロビジョニング |
-
-### 重要な技術ポイント
-
-**分散トレーシングの仕組み（Phase 5）**
-
-`FetchInstrumentation` がブラウザの fetch リクエストに自動的に `traceparent` ヘッダー（W3C Trace Context）を付与し、Go バックエンドの `otelhttp` がそれを受け取ることで、フロントエンドとバックエンドのスパンが同一 Trace ID でつながります。
-
-```
-Browser fetch("/api/todos")
-  → traceparent: 00-{trace-id}-{span-id}-01  (自動付与)
-    → backend otelhttp が trace-id を継続
-      → 同一トレースとして Tempo に記録
-```
-
-**3シグナルの役割**
-
-- **Traces**: 「どこで何が起きたか」を時系列で追跡（因果関係の可視化）
-- **Metrics**: 「どのくらいの量・速さ」を数値で把握（アラート・SLO に活用）
-- **Logs**: 「何が起きたか」の詳細テキスト（デバッグに活用）
+| 1 | [c7d25a2](https://github.com/hidekingerz/otel-practice-env/commit/c7d25a2) | インフラ基盤 (LGTM + OTel Collector) |
+| 2 | [0e9b41e](https://github.com/hidekingerz/otel-practice-env/commit/0e9b41e) | Go バックエンド（素） |
+| 3 | [b254c17](https://github.com/hidekingerz/otel-practice-env/commit/b254c17) | Go バックエンド + OTel 計装 |
+| 4 | [ab6d1f6](https://github.com/hidekingerz/otel-practice-env/commit/ab6d1f6) | React フロントエンド（素） |
+| 5 | [8b3774b](https://github.com/hidekingerz/otel-practice-env/commit/8b3774b) | React + OTel JS SDK・分散トレーシング |
+| 6 | [3e43b87](https://github.com/hidekingerz/otel-practice-env/commit/3e43b87) | 手動計装・メトリクス・ログ |
+| 7 | [13d8e9a](https://github.com/hidekingerz/otel-practice-env/commit/13d8e9a) | Grafana ダッシュボード・仕上げ |
 
 ## ドキュメント
 
-- [プロジェクト目的](docs/purpose.md)
-- [アーキテクチャと技術スタック](docs/architecture.md)
-- [実装計画](docs/implementation-plan.md)
+| 種別 | ドキュメント | 内容 |
+|---|---|---|
+| チュートリアル | [はじめてみよう](docs/tutorials/getting-started.md) | 環境起動から Grafana で3シグナル確認まで |
+| ハウツー | [開発ガイド](docs/how-to/development.md) | ローカル開発・ログ確認・設定変更の手順 |
+| リファレンス | [設定リファレンス](docs/reference/configuration.md) | ポート・環境変数・API・Collector 設定の一覧 |
+| 解説 | [プロジェクト目的](docs/explanation/purpose.md) | 背景・学習ゴール・スコープ |
+| 解説 | [アーキテクチャと設計思想](docs/explanation/architecture.md) | システム構成・技術選定理由・トレードオフ |
