@@ -177,6 +177,35 @@ func (h *TodoHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
+// TodoStats は Stats エンドポイントのレスポンス型
+type TodoStats struct {
+	Total     int `json:"total"`
+	Completed int `json:"completed"`
+	Pending   int `json:"pending"`
+}
+
+// Stats は GET /api/todos/stats のハンドラ
+// NOTE: このハンドラには意図的に OTel 計装を入れていません。
+// ハンズオン練習 (docs/tutorials/hands-on-instrumentation.md) で自分で追加してみましょう。
+func (h *TodoHandler) Stats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var stats TodoStats
+	err := h.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) AS total,
+			SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) AS completed,
+			SUM(CASE WHEN completed = 0 THEN 1 ELSE 0 END) AS pending
+		FROM todos
+	`).Scan(&stats.Total, &stats.Completed, &stats.Pending)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, stats)
+}
+
 func (h *TodoHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, span := tracer.Start(r.Context(), "todo.Delete")
 	defer span.End()
