@@ -56,6 +56,10 @@ frontend      | nginx: the configuration file ... syntax is ok
 
 ブラウザで http://localhost:3000 を開きます。
 
+> **ログイン画面が表示された場合**
+>
+> `grafana/otel-lgtm` イメージはデフォルトで匿名アクセス（Admin 権限）が有効なため、通常はログイン不要です。ログイン画面が表示された場合は `admin` / `admin` でサインインしてください。
+
 左サイドバーの「Dashboards」をクリックすると、**"OTel Practice - Overview"** ダッシュボードが表示されます。
 
 ダッシュボードには以下のパネルが含まれています。
@@ -107,6 +111,35 @@ Todo 作成の累計回数が表示されます。`rate(todo_created_total[5m])`
 ```
 
 フロントエンドのログが時系列で表示されます。ログ行をクリックすると「Tempo でトレースを表示」リンクが表示され、ログから対応するトレースに直接ジャンプできます。
+
+## トラブルシューティング
+
+### ダッシュボードにデータが表示されない
+
+OTel Collector がテレメトリを受信できていない可能性があります。
+
+```bash
+docker compose logs otel-collector
+```
+
+エラーがなければ、Step 3 の Todo 操作を再度行い、数秒待ってからダッシュボードを更新してください。
+
+### コンテナが起動しない / すぐ終了する
+
+問題のあるサービスのログを確認してください。
+
+```bash
+docker compose logs <サービス名>
+# 例: docker compose logs backend
+```
+
+### Grafana に `http://localhost:3000` でアクセスできない
+
+Grafana は起動完了まで数分かかることがあります。ログに `Grafana server started` が出るまで待ってから再アクセスしてください。
+
+```bash
+docker compose logs grafana
+```
 
 ## チュートリアル完了
 

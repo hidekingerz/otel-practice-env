@@ -104,7 +104,10 @@ receivers:
   otlp:
     protocols:
       grpc:  # ポート 4317
-      http:  # ポート 4318（CORS 許可: localhost, localhost:5173）
+      http:  # ポート 4318
+        # CORS 設定
+        # allowed_origins: http://localhost, http://localhost:5173
+        # allowed_headers: *
 
 processors:
   batch:
