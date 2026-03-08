@@ -41,3 +41,17 @@ export async function deleteTodo(id: number): Promise<void> {
   const res = await fetch(`${BASE}/todos/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`deleteTodo: ${res.status}`);
 }
+
+export interface TodoStats {
+  total: number;
+  completed: number;
+  pending: number;
+}
+
+// NOTE: この関数には意図的に OTel 計装を入れていません。
+// ハンズオン練習 (docs/tutorials/hands-on-instrumentation.md) で自分で追加してみましょう。
+export async function fetchTodoStats(): Promise<TodoStats> {
+  const res = await fetch(`${BASE}/todos/stats`);
+  if (!res.ok) throw new Error(`fetchTodoStats: ${res.status}`);
+  return res.json();
+}

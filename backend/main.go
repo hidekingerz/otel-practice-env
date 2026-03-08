@@ -51,6 +51,7 @@ func main() {
 	todoHandler := handler.NewTodoHandler(database)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/todos/stats", todoHandler.Stats)
 	mux.HandleFunc("GET /api/todos", todoHandler.List)
 	mux.HandleFunc("POST /api/todos", todoHandler.Create)
 	mux.HandleFunc("PUT /api/todos/{id}", todoHandler.Update)

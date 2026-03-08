@@ -9,6 +9,7 @@ import {
   deleteTodo,
 } from "../api/client";
 import { meter, logger } from "../otel/tracing";
+import { TodoStats } from "./TodoStats";
 
 // カスタムメトリクス
 const todoCreatedCounter = meter.createCounter("todo.created", {
@@ -164,6 +165,8 @@ export function TodoList() {
   return (
     <div style={{ maxWidth: 600, margin: "40px auto", fontFamily: "sans-serif" }}>
       <h1>Todo App</h1>
+
+      <TodoStats />
 
       <form onSubmit={handleCreate} style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <input
