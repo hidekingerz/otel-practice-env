@@ -4,7 +4,7 @@
 
 **Goal:** OBI（OpenTelemetry eBPF Instrumentation）を Compose profile `obi` で追加し、nginx をゼロコードで計装して既存の分散トレースに nginx 区間を加え、Go backend との比較演習と Diataxis ドキュメントを提供する。
 
-**Architecture:** `obi` サービス（`otel/ebpf-instrument:v0.13.0`、`pid: host`、`privileged: true`）が `obi/config.yaml` を読み、ポート 80（nginx）と 8080（backend）のプロセスを eBPF で計装して OTLP/HTTP で既存の `otel-collector:4318` に送る。backend は OTLP 送信を OBI が検知して既定では抑止され、環境変数 `OBI_EXCLUDE_OTEL_INSTRUMENTED=false` で抑止を外して比較する。アプリケーションコード・nginx.conf・Collector・Grafana は変更しない。
+**Architecture:** `obi` サービス（`otel/ebpf-instrument:v0.13.0`、`pid: host`、`privileged: true`、`stop_grace_period: 60s`）が `obi/` 配下の設定を読み、既定の `config.yaml` では nginx（ポート 80 かつ実行ファイル名 nginx）だけを eBPF で計装して OTLP/HTTP で既存の `otel-collector:4318` に送る。比較演習は `OBI_CONFIG=config-compare.yaml` で backend（`backend-obi`）も対象にする。アプリケーションコード・nginx.conf・Collector・Grafana は変更しない。
 
 **Tech Stack:** Docker Compose（profiles）、OBI v0.13.0、OTel Collector、Grafana LGTM（Tempo / Mimir）、Markdown（Diataxis）
 
@@ -15,9 +15,10 @@
 - OBI イメージは `otel/ebpf-instrument:v0.13.0` にピン止めする
 - `obi` サービスは `profiles: [obi]` でのみ起動する。`docker compose up`（profile なし）の挙動は変えない
 - `backend/`、`frontend/`（`nginx.conf` 含む）、`otel-collector/`、`grafana/` は変更しない
-- OBI の設定は `obi/config.yaml` に置き、環境変数は `OBI_EXCLUDE_OTEL_INSTRUMENTED`（既定 `true`）のみ
-- discovery の service name は `nginx`（port 80）と `backend-obi`（port 8080）
-- `ebpf.context_propagation: all`、`routes.unmatched: path`、`otel_metrics_export.interval: 15s`
+- OBI の設定は `obi/config.yaml`（nginx のみ）と `obi/config-compare.yaml`（nginx + backend）に置き、ホスト側の環境変数は `OBI_CONFIG`（既定 `config.yaml`）のみ。`OBI_EXCLUDE_OTEL_INSTRUMENTED` は使わない
+- discovery の service name は `nginx`（port 80、`exe_path: "*nginx*"`）と `backend-obi`（port 8080、`exe_path: "*/app/server*"`、compare のみ）
+- `ebpf.context_propagation: all`、`routes.unmatched: path`、`otel_metrics_export.interval: 15s`、compare では `exclude_otel_instrumented_services: false`
+- トレースの形はブラウザ起点で nginx と backend が兄弟（spec 4.6）。ドキュメントは「ぶら下がる」と書かない
 - ドキュメントは日本語、既存の Diataxis 構成と文体に合わせる。既存チュートリアル 2 本は変更しない
 - コミットメッセージは既存の流儀（`feat:` / `docs:` + 日本語）に従い、末尾に下記を付ける
 
@@ -36,7 +37,8 @@ Claude-Session: https://claude.ai/code/session_01E8thMHFf395nhkZrph6uzy
 | 操作 | ファイル | 責務 |
 |---|---|---|
 | Modify | `docker-compose.yml` | `obi` サービス定義（profile、権限、マウント） |
-| Create | `obi/config.yaml` | OBI の discovery / 伝播 / routes / エクスポート設定 |
+| Create | `obi/config.yaml` | OBI の既定設定（nginx のみ） |
+| Create | `obi/config-compare.yaml` | 比較演習用設定（nginx + backend-obi） |
 | Create | `docs/tutorials/zero-code-obi.md` | Phase 9 チュートリアル本編 |
 | Modify | `docs/explanation/architecture.md` | 構成図への OBI 追加、SDK vs eBPF の解説節 |
 | Modify | `docs/reference/configuration.md` | `obi` サービス、`obi/config.yaml` キー、環境変数、OBI メトリクス名 |
@@ -273,18 +275,217 @@ docker compose --profile obi up -d obi
 
 ---
 
-### Task 3: チュートリアル `docs/tutorials/zero-code-obi.md` を書く
+### Task 3: 実機検証の結果を反映して compose と OBI 設定を改訂する
+
+**背景**: Task 2 の検証で、(a) `exclude_otel_instrumented_services` がこの構成では発火しない、(b) `open_ports` だけだと Docker Desktop の `dockerd` も計装される、(c) OBI コンテナの `stop` / `restart` が "PID is zombie" エラーで失敗する、ことが分かった。spec 9 章に従い、設定ファイルを 2 つに分けて `OBI_CONFIG` で切り替え、`exe_path` で対象を絞り、`stop_grace_period: 60s` を追加する。
+
+**Files:**
+- Modify: `docker-compose.yml`（`obi` サービスのみ）
+- Modify: `obi/config.yaml`
+- Create: `obi/config-compare.yaml`
+
+**Interfaces:**
+- Consumes: Task 1 の `obi` サービス
+- Produces: 環境変数 `OBI_CONFIG`（既定 `config.yaml`、比較演習は `config-compare.yaml`）、マウント `./obi:/config:ro`、discovery 名 `nginx` / `backend-obi`。環境変数 `OBI_EXCLUDE_OTEL_INSTRUMENTED` は**廃止**。後続のドキュメントはこれらを参照する
+
+- [ ] **Step 1: `docker-compose.yml` の `obi` サービスを次に置き換える**
+
+```yaml
+  # Phase 9: OBI (eBPF 自動計装)。`docker compose --profile obi up` でのみ起動する
+  obi:
+    image: otel/ebpf-instrument:v0.13.0
+    container_name: obi
+    profiles: ["obi"]
+    # 比較演習では OBI_CONFIG=config-compare.yaml を指定する
+    command: ["--config=/config/${OBI_CONFIG:-config.yaml}"]
+    # eBPF でホスト上の他コンテナのプロセスを観測するために必須
+    pid: host
+    privileged: true
+    # Docker Desktop では停止時に "PID is zombie" エラーが出るため、終了を待つ猶予を長めに取る
+    stop_grace_period: 60s
+    volumes:
+      - ./obi:/config:ro
+    depends_on:
+      - otel-collector
+      - frontend
+      - backend
+    networks:
+      - otel-network
+```
+
+`environment:` ブロックは削除する。
+
+- [ ] **Step 2: `obi/config.yaml` を次の内容に置き換える**
+
+```yaml
+# OBI (OpenTelemetry eBPF Instrumentation) の設定（既定: nginx のみを計装）
+# 参考: https://opentelemetry.io/ja/docs/zero-code/obi/
+# backend も OBI で計装して比較するときは config-compare.yaml を使う
+
+discovery:
+  instrument:
+    # SDK を入れられない nginx（frontend コンテナ）。OBI だけで可視化する主役。
+    # Docker Desktop では公開ポートを VM 内の dockerd も開いているため、
+    # ポートだけでなく実行ファイル名でも絞る
+    - name: nginx
+      open_ports: 80
+      exe_path: "*nginx*"
+
+ebpf:
+  # 送信パケットの traceparent を OBI が書き換え、下流の span を親子にする（既定は無効）。
+  # Docker Desktop のカーネルでは HTTP ヘッダ注入が無効化され起動時に ERROR ログが出るが、
+  # OBI 同士の TCP レベル伝播は機能する
+  context_propagation: all
+
+routes:
+  # http.route を低カーディナリティに保つためのパターン
+  patterns:
+    - /api/todos/stats
+    - /api/todos/:id
+    - /api/todos
+  # パターンに一致しないパスはそのまま http.route にする
+  unmatched: path
+
+otel_traces_export:
+  endpoint: http://otel-collector:4318
+
+otel_metrics_export:
+  endpoint: http://otel-collector:4318
+  # 既定 60s だと確認に待たされるため短縮
+  interval: 15s
+```
+
+- [ ] **Step 3: `obi/config-compare.yaml` を作成する**
+
+```yaml
+# OBI の設定（比較演習: nginx に加えて Go backend も OBI で計装する）
+# config.yaml との差分は discovery セクションだけ
+
+discovery:
+  instrument:
+    - name: nginx
+      open_ports: 80
+      exe_path: "*nginx*"
+    # OTel SDK で計装済みの backend を、あえて OBI でも計装する。
+    # service.name を backend-obi にして SDK 由来（backend）と見分ける
+    - name: backend-obi
+      open_ports: 8080
+      exe_path: "*/app/server*"
+  # OBI には「OTLP を送信しているプロセスを自動で除外する」機能がある（既定 true）が、
+  # backend のように単一の gRPC エンドポイントへ全シグナルを送る構成では検知が発火しない。
+  # 比較演習の挙動を環境に依らず固定するため明示的に無効化する
+  exclude_otel_instrumented_services: false
+
+ebpf:
+  context_propagation: all
+
+routes:
+  patterns:
+    - /api/todos/stats
+    - /api/todos/:id
+    - /api/todos
+  unmatched: path
+
+otel_traces_export:
+  endpoint: http://otel-collector:4318
+
+otel_metrics_export:
+  endpoint: http://otel-collector:4318
+  interval: 15s
+```
+
+- [ ] **Step 4: Compose 定義を検証する**
+
+Run:
+```bash
+docker compose --profile obi config | sed -n '/^  obi:/,/^  [a-z]/p' | grep -E 'config.yaml|stop_grace_period|/config:ro' \
+  && OBI_CONFIG=config-compare.yaml docker compose --profile obi config | grep -- '--config=/config/config-compare.yaml' \
+  && docker compose --profile obi config | sed -n '/^  obi:/,/^  [a-z]/p' | grep -c OBI_EXCLUDE; echo "exit=$?"
+```
+Expected: 1 行目で `--config=/config/config.yaml`、`stop_grace_period`、`/config:ro` を含む行、2 行目で compare のコマンド行が出て、最後の grep -c は `0` を出し `exit=1`（`OBI_EXCLUDE` が残っていない）
+
+- [ ] **Step 5: 実機で検出対象を確認する（既定設定）**
+
+既存の obi コンテナが残っていれば先に消す。
+
+Run:
+```bash
+docker rm -f $(docker ps -aq --filter name=obi) 2>/dev/null; docker compose --profile obi up -d obi && sleep 20 && docker compose logs obi | grep 'instrumenting process'
+```
+Expected: `cmd=/usr/sbin/nginx ... service=nginx` の行のみ。`dockerd` と `/app/server` の行が**無い**
+
+- [ ] **Step 6: stop / restart / 再作成が成功することを確認する**
+
+OBI の起動から 30 秒以上経ってから実行する（短時間ならエラーが再現しないため）。
+
+Run:
+```bash
+docker compose --profile obi stop obi; echo "stop=$?"; docker compose --profile obi up -d obi && sleep 35 && docker compose --profile obi restart obi; echo "restart=$?"; sleep 35; OBI_CONFIG=config-compare.yaml docker compose --profile obi up -d obi; echo "recreate=$?"; docker ps -a --filter name=obi --format '{{.Names}} {{.Status}}'
+```
+Expected: `stop=0`、`restart=0`、`recreate=0`。最後の一覧に `obi` が 1 つだけ（`<hash>_obi` のような残骸が無い）
+
+- [ ] **Step 7: 比較設定の検出対象とメトリクスを確認する**
+
+Run:
+```bash
+sleep 20; docker compose logs obi | grep 'instrumenting process'
+for i in 1 2 3; do curl -s -o /dev/null http://localhost/api/todos; curl -s -o /dev/null http://localhost/api/todos/stats; done; sleep 40
+PROM_UID=$(curl -s http://localhost:3000/api/datasources | jq -r '.[]|select(.name=="Prometheus")|.uid')
+curl -s "http://localhost:3000/api/datasources/proxy/uid/$PROM_UID/api/v1/query?query=sum(rate(rpc_client_call_duration_seconds_count%7Bservice_name%3D%22backend-obi%22%7D%5B2m%5D))" | jq -c '.data.result'
+curl -s "http://localhost:3000/api/datasources/proxy/uid/$PROM_UID/api/v1/query?query=sum(rate(db_client_operation_duration_seconds_count%7Bservice_name%3D%22backend-obi%22%7D%5B2m%5D))" | jq -c '.data.result'
+```
+Expected: ログは nginx と `/app/server` の 2 種類のみ（`dockerd` 無し）。`rpc_client_*` のクエリは `[]` または値 `"0"`。`db_client_*` のクエリは正の値
+
+- [ ] **Step 8: ブラウザ相当のトレース形状を確認する（既定設定に戻して）**
+
+Run:
+```bash
+docker compose --profile obi up -d obi && sleep 20
+TEMPO_UID=$(curl -s http://localhost:3000/api/datasources | jq -r '.[]|select(.name=="Tempo")|.uid')
+TID=$(openssl rand -hex 16); SID=$(openssl rand -hex 8)
+curl -s -o /dev/null -H "traceparent: 00-$TID-$SID-01" http://localhost/api/todos/stats; sleep 25
+curl -s "http://localhost:3000/api/datasources/proxy/uid/$TEMPO_UID/api/traces/$TID" \
+ | jq -r --arg sid "$SID" '.batches[] | (.resource.attributes[] | select(.key=="service.name") | .value.stringValue) as $svc
+   | .scopeSpans[].spans[] | "\($svc)\t\(.kind)\t\(.name)\tparent=\(.parentSpanId // "-" | @base64d | explode | map(. as $b | "0123456789abcdef"[$b/16|floor:$b/16|floor+1] + "0123456789abcdef"[$b%16:$b%16+1]) | join(""))"'
+echo "SID=$SID"
+```
+Expected: `nginx` の SERVER span と `backend` の SERVER span の `parent` がどちらも `SID` に一致する（兄弟）。`backend-obi` は出ない
+
+- [ ] **Step 9: 検証結果を記録する**
+
+`/private/tmp/claude-501/-Users-hidekingerz-ghq-github-com-hidekingerz-otel-practice-env/ddaee3ba-4d26-45b2-91cd-7667ac0b971c/scratchpad/obi-verification.md` の末尾に「## Task 3 再検証」節を追記し、Step 5〜8 の要点（検出ログの行、各コマンドの終了コード、親子関係の結果）を書く。
+
+- [ ] **Step 10: コミット**
+
+```bash
+git add docker-compose.yml obi/config.yaml obi/config-compare.yaml
+git commit -m "$(cat <<'EOF'
+feat: Phase 9 - OBI 設定を nginx 用と比較用に分離し Docker Desktop の制約に対応
+
+- exclude_otel_instrumented_services が発火しないため OBI_CONFIG で設定ファイルを切り替える方式に変更
+- exe_path で dockerd を計装対象から外す
+- stop_grace_period: 60s で停止時の zombie エラーを回避
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01E8thMHFf395nhkZrph6uzy
+EOF
+)"
+```
+
+---
+
+### Task 4: チュートリアル `docs/tutorials/zero-code-obi.md` を書く
 
 **Files:**
 - Create: `docs/tutorials/zero-code-obi.md`
 
 **Interfaces:**
-- Consumes: Task 1 の名前（`obi`、`nginx`、`backend-obi`、`OBI_EXCLUDE_OTEL_INSTRUMENTED`）、Task 2 の観測結果（span 名・メトリクス名）
+- Consumes: Task 3 の名前（`obi`、`nginx`、`backend-obi`、`OBI_CONFIG`、`config-compare.yaml`）、Task 2 / 3 の観測結果（`obi-verification.md`）
 - Produces: README とハウツーからリンクされるファイル名 `docs/tutorials/zero-code-obi.md`
 
 - [ ] **Step 1: 以下の内容でファイルを作成する**
 
-Task 2 の `obi-verification.md` と食い違う span 名・メトリクス名があれば、観測結果に合わせて置き換える。
+`obi-verification.md` と食い違う span 名・メトリクス名があれば、観測結果に合わせて置き換える。
 
 ````markdown
 # ゼロコード計装：OBI で nginx をトレースする
@@ -325,10 +526,14 @@ docker compose --profile obi up -d
 起動したら、OBI が nginx を検出したことをログで確認します。
 
 ```bash
-docker compose logs obi
+docker compose logs obi | grep "instrumenting process"
 ```
 
-`nginx` を含む検出ログが出ていれば成功です。`permission denied` などのエラーが出た場合は、末尾のトラブルシューティングを参照してください。
+`cmd=/usr/sbin/nginx ... service=nginx` という行が出ていれば成功です。
+
+> **起動時に `ERROR ... context propagation is disabled` と出る**
+>
+> Docker Desktop のカーネルでは、OBI が HTTP ヘッダーに `traceparent` を書き込む機能が無効化されます。このエラーが出ても nginx のスパンとメトリクスは問題なく取得できます。影響は Step 3 で説明します。
 
 ## Step 2: Todo アプリを操作する
 
@@ -338,27 +543,30 @@ docker compose logs obi
 
 1. Grafana（http://localhost:3000）の左サイドバーで「Explore」を開く
 2. データソースに「Tempo」を選ぶ
-3. 「Search」タブで「Service Name」に `nginx` を入力して「Run query」を押す
+3. 「TraceQL」タブで `{ resource.service.name = "nginx" }` を入力して「Run query」を押す
 
 `GET /api/todos` のようなトレースが一覧に出てきましたか？ 1 つ開いてウォーターフォールを見てください。
 
 ```
-frontend   HTTP GET /api/todos            ← ブラウザ（OTel JS SDK）
-└─ nginx   GET /api/todos  (server)       ← OBI が nginx で観測
-   └─ nginx   GET /api/todos  (client)    ← nginx → backend の送信を OBI が観測
-      └─ backend   GET /api/todos         ← Go（OTel Go SDK）
-         └─ backend   SELECT ...          ← otelsql
+frontend   HTTP GET /api/todos               ← ブラウザ（OTel JS SDK）
+├─ nginx   GET /api/todos  (server)          ← OBI が nginx で観測
+│  ├─ nginx  in queue / processing           ← nginx 内部の待ち時間と処理時間
+│  └─ nginx  GET /api/todos  (client)        ← nginx → backend の送信を OBI が観測
+└─ backend GET /api/todos                    ← Go（OTel Go SDK）
+   └─ backend SELECT ...                     ← otelsql
 ```
 
-これまで `frontend` の直下にあった `backend` のスパンが、nginx の 2 つのスパンの下にぶら下がっています。nginx のコードも設定も触っていないのに、分散トレースの一部になりました。
+これまで `frontend` の直下に `backend` だけがあったトレースに、nginx のスパンが加わりました。nginx のコードも設定も触っていないのに、分散トレースの一部になっています。
 
-> **なぜ親子関係がつながるのか**
+> **nginx と backend が親子ではなく兄弟に並ぶ理由**
 >
-> nginx は受け取った `traceparent` ヘッダーをそのまま backend に転送します。OBI はそれだけでなく、`ebpf.context_propagation: all` の設定により、nginx が送信するパケットの `traceparent` を **自分が作った client span の ID に書き換えて** います。これにより backend のスパンの親が nginx の client span になります。この設定を外すと、nginx のスパンと backend のスパンは「同じ親を持つ兄弟」として表示されます。
+> nginx はブラウザから受け取った `traceparent` ヘッダーをそのまま backend に転送します。OBI は nginx のスパンをこの `traceparent` の子として作り、backend の SDK も同じ `traceparent` の子としてスパンを作るため、両者は兄弟になります。
+>
+> `obi/config.yaml` の `ebpf.context_propagation: all` が効く環境（ヘッダー注入が有効なカーネル）では、OBI が nginx の送信パケットの `traceparent` を自分の client span の ID に書き換えるため、backend が nginx の下にぶら下がります。Docker Desktop では Step 1 のエラーのとおりこの機能が無効なので、兄弟として表示されます。
 
 ## Step 4: Prometheus で nginx の RED メトリクスを確認する
 
-OBI はスパンと同時に、HTTP サーバー / クライアントの所要時間ヒストグラムを生成します。
+OBI はスパンと同時に、HTTP サーバー / クライアントの所要時間とボディサイズのヒストグラムを生成します。
 
 1. Explore でデータソースに「Prometheus」を選ぶ
 2. クエリに次を入力して「Run query」を押す
@@ -377,30 +585,38 @@ sum by (http_route, http_response_status_code) (rate(http_server_request_duratio
 
 ## Step 5: SDK 計装と OBI を比較する（backend を二重計装する）
 
-ここまで、OBI は backend を計装していませんでした。backend が OTLP を送信している（= すでに SDK で計装されている）ことを OBI が検知し、自動的に対象から外していたからです（`discovery.exclude_otel_instrumented_services`、既定 `true`）。
+ここまで OBI は nginx だけを計装していました。次に、すでに OTel Go SDK で計装されている backend を **OBI でも** 計装して、同じリクエストを 2 つの方法で観測してみます。
 
-この抑止を外して、同じ backend を SDK と OBI の両方で計装してみます。
+設定ファイルを比較用（`obi/config-compare.yaml`）に切り替えて OBI を再作成します。
 
 ```bash
-OBI_EXCLUDE_OTEL_INSTRUMENTED=false docker compose --profile obi up -d obi
+OBI_CONFIG=config-compare.yaml docker compose --profile obi up -d obi
 ```
 
-Todo アプリを操作してから、Tempo の Search で「Service Name」に `backend-obi` を入力して検索します。
+ログに `cmd=/app/server ... service=backend-obi` が加わったことを確認してから、Todo アプリを操作します。
 
-同じリクエストについて、`backend`（SDK）のトレースと `backend-obi`（OBI）のトレースを見比べてください。
+```bash
+docker compose logs obi | grep "instrumenting process"
+```
+
+Tempo の TraceQL で `{ resource.service.name = "backend-obi" }` を検索し、トレースを 1 つ開いてください。同じリクエストについて、`backend`（SDK）のスパンと `backend-obi`（OBI）のスパンが同じトレース内に並んでいます。
 
 | 観点 | `backend`（OTel Go SDK） | `backend-obi`（OBI） |
 |---|---|---|
-| HTTP サーバーのスパン | あり（`otelhttp`） | あり |
+| HTTP サーバーのスパン | あり（`otelhttp`） | あり。加えて `in queue` / `processing` の内部スパン |
 | `todo.List` のような名前付きの内部スパン | あり | **なし** |
 | `todo.total` のような手動で付けた属性 | あり | **なし** |
-| DB クエリのスパン | あり（`otelsql`） | あり（MySQL プロトコルを eBPF で解析） |
+| DB クエリのスパン | あり（`otelsql`） | あり（`SELECT todos` など。MySQL プロトコルを eBPF で解析） |
 | `GET /api/todos/stats`（[ハンズオン](hands-on-instrumentation.md) の未計装 API） | HTTP スパンのみ | HTTP スパンと SQL スパンが**何もしなくても**見える |
 | ログ | あり | なし（OBI はトレースとメトリクスのみ） |
 
 OBI は「何も書かなくてもプロトコル境界は全部見える」代わりに、「コードの意図（この処理は何をしているのか）」は見えません。SDK はその逆です。実務では、OBI でカバレッジを確保しつつ、重要な処理は SDK で深掘りする、という組み合わせが現実的です。
 
-確認が終わったら既定の状態に戻します。
+> **OBI の「SDK 計装済みサービスの自動除外」について**
+>
+> OBI には、OTLP を送信しているプロセスを検知して自分の計装を抑止する機能（`discovery.exclude_otel_instrumented_services`、既定で有効）があります。ただし検知は「OTLP のエクスポート通信を観測できたか」に依存し、この環境の backend（単一の gRPC エンドポイントに全シグナルを送信）では発火しません。そのため本プロジェクトでは、OBI の対象を設定ファイルで明示的に分けています。
+
+確認が終わったら既定の設定に戻します。
 
 ```bash
 docker compose --profile obi up -d obi
@@ -424,28 +640,28 @@ docker compose --profile obi down
 
 ### `docker compose logs obi` に permission denied や BTF 関連のエラーが出る
 
-OBI は `privileged: true` と `pid: host` を必要とします。Docker Desktop の設定で特権コンテナが制限されていないか確認してください。Linux の場合はカーネル 5.17 以降で BTF（`/sys/kernel/btf/vmlinux`）が有効である必要があります。
+OBI は `privileged: true` と `pid: host` を必要とします。Docker Desktop の設定で特権コンテナが制限されていないか確認してください。Linux の場合はカーネル 5.8 以降で BTF（`/sys/kernel/btf/vmlinux`）が有効である必要があります。
 
 ### Tempo に nginx のスパンが出ない
 
-- `docker compose logs obi` で nginx の検出ログが出ているか確認する
+- `docker compose logs obi | grep "instrumenting process"` で nginx が検出されているか確認する
 - `docker compose logs otel-collector` で OBI からの OTLP 受信エラーがないか確認する
 - OBI の起動後に Todo アプリを操作したか確認する（起動前のリクエストは観測されない）
 
-### nginx と backend のスパンが親子ではなく兄弟になる
+### `stop` や `restart` が "PID ... is zombie and can not be killed" で失敗する
 
-`obi/config.yaml` の `ebpf.context_propagation` が `all` になっているか確認してください。変更した場合は `docker compose --profile obi restart obi` で反映されます。
+Docker Desktop と `pid: host` の組み合わせで起きる既知の現象です。`docker-compose.yml` の `obi` サービスには回避のため `stop_grace_period: 60s` を設定しています。それでも失敗した場合は、数秒待ってから同じコマンドをもう一度実行してください。`<ハッシュ>_obi` という名前のコンテナが残った場合は `docker rm -f` で削除できます。
 
-### 既定の状態なのに `backend-obi` のスパンが少しだけ出る
+### `backend-obi` のスパンに `/containerd.services...` のようなものが混ざる
 
-OBI は backend が OTLP を送信するのを観測してから抑止を始めるため、OBI 起動直後の数秒間は `backend-obi` のスパンが混ざることがあります。時間が経っても出続ける場合は `OBI_EXCLUDE_OTEL_INSTRUMENTED` が `false` になっていないか確認してください。
+Docker Desktop では公開ポートを VM 内の `dockerd` も開いているため、`open_ports` だけで対象を指定すると `dockerd` まで計装されます。本プロジェクトの設定では `exe_path` を併用して除外しています。`obi/config.yaml` を変更した場合は `exe_path` が残っているか確認してください。
 
 ## チュートリアル完了
 
 お疲れさまでした。これで以下を体験できました。
 
 - コードも設定も変えずに nginx のスパンとメトリクスを取得する
-- eBPF によるコンテキスト伝播で、nginx の区間が既存の分散トレースに組み込まれる
+- nginx の区間が既存の分散トレースに組み込まれる
 - `routes.patterns` によるメトリクスのカーディナリティ制御
 - SDK 計装と eBPF 自動計装の「取れるもの・取れないもの」の違い
 
@@ -477,14 +693,14 @@ EOF
 
 ---
 
-### Task 4: 解説 `docs/explanation/architecture.md` を更新する
+### Task 5: 解説 `docs/explanation/architecture.md` を更新する
 
 **Files:**
-- Modify: `docs/explanation/architecture.md`（構成図 5〜45 行目、「設計上のトレードオフ」110 行目以降）
+- Modify: `docs/explanation/architecture.md`（構成図 5〜45 行目、「技術選定の理由」末尾、「設計上のトレードオフ」末尾）
 
 **Interfaces:**
-- Consumes: Task 1 の名前
-- Produces: 見出し「SDK 計装と eBPF 自動計装（OBI）」。Task 3 のチュートリアル末尾がこの見出し名で参照している
+- Consumes: Task 3 の名前
+- Produces: 見出し「SDK 計装と eBPF 自動計装（OBI）」。Task 4 のチュートリアル末尾がこの見出し名で参照している
 
 - [ ] **Step 1: mermaid 構成図に OBI を追加する**
 
@@ -530,7 +746,7 @@ OBI (nginx を eBPF で観測) --[OTLP/HTTP]--> OTel Collector --> Mimir --> Gra
 
 Phase 9 で追加した [OBI（OpenTelemetry eBPF Instrumentation）](https://opentelemetry.io/ja/docs/zero-code/obi/) は、Linux カーネルの eBPF 機能でプロセスのシステムコールやネットワーク通信を外側から観測し、HTTP / gRPC / SQL などのプロトコル境界でスパンと RED メトリクスを生成する。アプリケーションのコード・設定・再ビルドは不要で、OBI コンテナを横に置くだけで動く。
 
-このプロジェクトでは、SDK を組み込めない **nginx** を OBI の主な対象にしている。nginx は `traceparent` ヘッダーを転送するだけで自身のスパンは出せなかったが、OBI により nginx の server span と backend への client span がトレースに加わる。さらに `ebpf.context_propagation: all` を有効にすると、OBI が nginx の送信パケットの `traceparent` を自身の client span の ID に書き換えるため、backend のスパンが nginx の下に正しくぶら下がる。
+このプロジェクトでは、SDK を組み込めない **nginx** を OBI の主な対象にしている。nginx は `traceparent` ヘッダーを転送するだけで自身のスパンは出せなかったが、OBI により nginx の server span（と内部の `in queue` / `processing`）、backend への client span がトレースに加わる。
 
 **SDK と OBI は置き換えではなく補完の関係にある。**
 
@@ -541,7 +757,11 @@ Phase 9 で追加した [OBI（OpenTelemetry eBPF Instrumentation）](https://op
 | 導入コスト | 言語ごとの SDK 導入とコード変更 | privileged コンテナ 1 つ |
 | 必要な権限 | なし | `pid: host` と特権（eBPF プログラムのロード、他プロセスのメモリ・ネットワーク観測） |
 
-OBI は既定で、OTLP を送信しているプロセス（= すでに SDK で計装されている）を計装対象から外す（`discovery.exclude_otel_instrumented_services`）。これにより SDK 計装済みの backend と OBI を同居させてもスパンが二重にならない。チュートリアルの比較演習ではこの抑止を意図的に外し、同じリクエストを SDK と OBI の両方で観測して差分を体験する。
+#### 設定ファイルを 2 つに分けている理由
+
+OBI には、OTLP を送信しているプロセス（= すでに SDK で計装されている）を自動的に計装対象から外す機能（`discovery.exclude_otel_instrumented_services`、既定で有効）がある。ただしこの検知は挙動ベースで、「OBI 自身が観測した client span が OTLP のエクスポートに見えるか」で判定する。backend のように単一の gRPC エンドポイントへ全シグナルを送る構成では、ポートからシグナル種別を特定できず検知が発火しない（upstream の [devdocs](https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/blob/main/devdocs/exclude-otel-instrumented-services.md) に明記されている制約）。
+
+そのため本プロジェクトでは自動除外に頼らず、`obi/config.yaml`（nginx のみ）と `obi/config-compare.yaml`（nginx + backend）を `OBI_CONFIG` 環境変数で明示的に切り替える。比較用の設定では、環境差で挙動が変わらないよう自動除外を明示的に無効にしている。
 
 #### Compose profile でオプトインにしている理由
 
@@ -553,16 +773,22 @@ OBI は既定で、OTLP を送信しているプロセス（= すでに SDK で�
 ```markdown
 ### eBPF の環境依存
 
-OBI は Linux カーネル 5.8 以降（コンテキスト伝播には 5.17 以降）と BTF を必要とし、Docker Desktop では内部の Linux VM 上で動作する。eBPF の挙動はカーネルや Docker のバージョンに依存するため、SDK 計装に比べて「どの環境でも同じように動く」保証は弱い。本プロジェクトは Docker Desktop（macOS / arm64）で検証している。
+OBI は Linux カーネル 5.8 以降と BTF を必要とし、Docker Desktop では内部の Linux VM 上で動作する。eBPF の挙動はカーネルや Docker のバージョンに依存するため、SDK 計装に比べて「どの環境でも同じように動く」保証は弱い。本プロジェクトは Docker Desktop（macOS / arm64）で検証しており、そこで観測した環境依存の挙動は次のとおり。
+
+| 挙動 | Docker Desktop での結果 | 対応 |
+|---|---|---|
+| `ebpf.context_propagation: all` による HTTP ヘッダー注入 | カーネルの `FIONREAD` 問題で無効化され、起動時に ERROR ログが出る。ブラウザ起点のトレースでは nginx と backend が兄弟として並ぶ（ヘッダー注入が有効なカーネルでは backend が nginx の下にぶら下がる） | 設定は残し、チュートリアルで環境差を説明 |
+| `open_ports` による対象の選択 | 公開ポートを VM 内の `dockerd` も開いているため、`dockerd` まで計装対象に入る。`containers_only: true` でも除外されない | `exe_path` を併用して実行ファイル名でも絞る |
+| OBI コンテナの停止 | `pid: host` のため、SIGTERM 後にプロセスが終了しても回収が遅れ、既定の 10 秒で "PID is zombie" エラーになる | `stop_grace_period: 60s` を設定 |
 ```
 
 - [ ] **Step 5: 変更を確認する**
 
 Run:
 ```bash
-grep -n "OBI" docs/explanation/architecture.md | wc -l && grep -n "^### SDK 計装と eBPF 自動計装（OBI）\|^### eBPF の環境依存" docs/explanation/architecture.md
+grep -c "OBI" docs/explanation/architecture.md && grep -n "^### SDK 計装と eBPF 自動計装（OBI）\|^### eBPF の環境依存\|^#### 設定ファイルを 2 つに分けている理由" docs/explanation/architecture.md
 ```
-Expected: OBI が 10 行以上に登場し、2 つの見出しが出力される
+Expected: OBI が 10 回以上、3 つの見出しが出力される
 
 - [ ] **Step 6: コミット**
 
@@ -579,14 +805,14 @@ EOF
 
 ---
 
-### Task 5: リファレンス `docs/reference/configuration.md` を更新する
+### Task 6: リファレンス `docs/reference/configuration.md` を更新する
 
 **Files:**
 - Modify: `docs/reference/configuration.md`
 
 **Interfaces:**
-- Consumes: Task 1 の名前と `obi/config.yaml` の内容、Task 2 で確定したメトリクス名
-- Produces: 見出し「OBI 設定（`obi/config.yaml`）」「OBI が生成するメトリクス」
+- Consumes: Task 3 の名前と設定ファイルの内容、Task 2 で確定したメトリクス名（`obi-verification.md`）
+- Produces: 見出し「OBI 設定（`obi/`）」「OBI が生成するメトリクス」
 
 - [ ] **Step 1: 「Docker Compose サービス一覧」の表の末尾に行を追加する**
 
@@ -601,51 +827,59 @@ EOF
 
 | 変数名 | 既定値 | 説明 |
 |---|---|---|
-| `OBI_EXCLUDE_OTEL_INSTRUMENTED` | `true` | `true` のとき、OTLP を送信しているプロセス（SDK 計装済みの backend）を OBI の計装対象から外す。`false` にすると `backend-obi` のテレメトリが生成される |
+| `OBI_CONFIG` | `config.yaml` | OBI が読む設定ファイル名（`obi/` ディレクトリ内）。`config-compare.yaml` にすると backend も OBI の計装対象になる |
 
-ホスト側で `OBI_EXCLUDE_OTEL_INSTRUMENTED=false docker compose --profile obi up -d obi` のように指定する。
+ホスト側で `OBI_CONFIG=config-compare.yaml docker compose --profile obi up -d obi` のように指定する（Compose が `command` の `${OBI_CONFIG:-config.yaml}` を展開する）。
 ```
 
 - [ ] **Step 3: 「OTel Collector パイプライン構成」の直後に節を追加する**
 
 ```markdown
-## OBI 設定（`obi/config.yaml`）
+## OBI 設定（`obi/`）
+
+| ファイル | 用途 |
+|---|---|
+| `obi/config.yaml` | 既定。nginx のみを計装する |
+| `obi/config-compare.yaml` | 比較演習用。nginx に加えて Go backend も `backend-obi` として計装する。`config.yaml` との差分は `discovery` セクションのみ |
 
 | キー | 値 | 説明 |
 |---|---|---|
-| `discovery.instrument[0]` | `name: nginx`, `open_ports: 80` | ポート 80 を開いているプロセス（frontend コンテナの nginx）を `service.name=nginx` として計装 |
-| `discovery.instrument[1]` | `name: backend-obi`, `open_ports: 8080` | ポート 8080 のプロセス（Go backend）を `service.name=backend-obi` として計装。既定では下の除外設定で抑止される |
-| `discovery.exclude_otel_instrumented_services` | `${OBI_EXCLUDE_OTEL_INSTRUMENTED:-true}` | OTLP を送信しているプロセスを計装対象から外す。OBI が設定ファイル内の `${VAR:-default}` を展開する |
-| `ebpf.context_propagation` | `all` | 送信パケットの `traceparent` を OBI の client span に書き換え、下流サービスのスパンを親子関係にする。既定は無効 |
+| `discovery.instrument[]` | `name: nginx`, `open_ports: 80`, `exe_path: "*nginx*"` | ポート 80 を開き、実行ファイル名に nginx を含むプロセスを `service.name=nginx` として計装。Docker Desktop では `dockerd` も公開ポートを開くため `exe_path` で絞る |
+| `discovery.instrument[]`（compare のみ） | `name: backend-obi`, `open_ports: 8080`, `exe_path: "*/app/server*"` | Go backend を `service.name=backend-obi` として計装 |
+| `discovery.exclude_otel_instrumented_services`（compare のみ） | `false` | OTLP を送信しているプロセスを自動除外する機能を無効化。この構成では検知が発火しないため、比較演習の挙動を固定する目的で明示 |
+| `ebpf.context_propagation` | `all` | 送信パケットの `traceparent` を OBI の client span に書き換える。Docker Desktop では HTTP ヘッダー注入が無効化される（起動時 ERROR ログ） |
 | `routes.patterns` | `/api/todos/stats`, `/api/todos/:id`, `/api/todos` | `http.route` 属性に使うパスパターン。`:id` はプレースホルダ |
 | `routes.unmatched` | `path` | パターンに一致しないパスはそのまま `http.route` にする |
 | `otel_traces_export.endpoint` | `http://otel-collector:4318` | トレースの OTLP/HTTP 送信先 |
 | `otel_metrics_export.endpoint` | `http://otel-collector:4318` | メトリクスの OTLP/HTTP 送信先 |
 | `otel_metrics_export.interval` | `15s` | メトリクスの送信間隔（既定 `60s`） |
 
-Compose 側では `pid: host` と `privileged: true` を指定している。OBI は eBPF プログラムのロードと他コンテナのプロセス観測のためにこれらを必要とする。
+Compose 側では `pid: host`、`privileged: true`、`stop_grace_period: 60s` を指定している。前 2 つは eBPF プログラムのロードと他コンテナのプロセス観測のため、最後は Docker Desktop で停止時に出る "PID is zombie" エラーの回避のため。
 
 設定キーの全一覧は [OBI 公式ドキュメント](https://opentelemetry.io/docs/zero-code/obi/configure/) を参照。
 
 ## OBI が生成するメトリクス
 
-OBI は OTel セマンティック規約に沿った名前でメトリクスを生成し、Prometheus（Mimir）では `.` が `_` に、単位 `s` が `_seconds` に変換される。
+OBI は OTel セマンティック規約に沿った名前でメトリクスを生成し、Prometheus（Mimir）では `.` が `_` に、単位が `_seconds` / `_bytes` に変換される。実機（v0.13.0）で確認した名前は次のとおり。
 
-| OTel での名前 | Prometheus での名前 | 種別 | 主なラベル |
+| Prometheus での名前 | 種別 | 出る service_name | 主なラベル |
 |---|---|---|---|
-| `http.server.request.duration` | `http_server_request_duration_seconds_{bucket,count,sum}` | ヒストグラム | `service_name`, `http_route`, `http_request_method`, `http_response_status_code` |
-| `http.client.request.duration` | `http_client_request_duration_seconds_{bucket,count,sum}` | ヒストグラム | `service_name`, `http_request_method`, `http_response_status_code`, `server_address` |
-| `db.client.operation.duration` | `db_client_operation_duration_seconds_{bucket,count,sum}` | ヒストグラム | `service_name`, `db_operation_name`, `db_collection_name`（`backend-obi` 有効時のみ） |
+| `http_server_request_duration_seconds_{bucket,count,sum}` | ヒストグラム | `nginx`, `backend-obi` | `http_route`, `http_request_method`, `http_response_status_code` |
+| `http_server_request_body_size_bytes_{bucket,count,sum}` | ヒストグラム | `nginx`, `backend-obi` | 同上 |
+| `http_server_response_body_size_bytes_{bucket,count,sum}` | ヒストグラム | `nginx`, `backend-obi` | 同上 |
+| `http_client_request_duration_seconds_{bucket,count,sum}` | ヒストグラム | `nginx` | `http_request_method`, `http_response_status_code`, `server_address` |
+| `http_client_request_body_size_bytes_{bucket,count,sum}` | ヒストグラム | `nginx` | 同上 |
+| `http_client_response_body_size_bytes_{bucket,count,sum}` | ヒストグラム | `nginx` | 同上 |
+| `db_client_operation_duration_seconds_{bucket,count,sum}` | ヒストグラム | `backend-obi` | `db_system_name`, `db_operation_name`, `db_collection_name` |
+| `target_info` | 情報 | すべて | リソース属性（`telemetry_distro_name` 等） |
 
 Explore クエリ例: `rate(http_server_request_duration_seconds_count{service_name="nginx"}[5m])`
 ```
 
-Task 2 の `obi-verification.md` に記録した実際の名前と異なる場合は、観測された名前に合わせて表を修正する。
-
 - [ ] **Step 4: 「バインドマウント」の表に行を追加する**
 
 ```markdown
-| `./obi/config.yaml` | `/config/config.yaml` | OBI 設定（profile `obi` 有効時のみ） |
+| `./obi` | `/config` | OBI 設定ディレクトリ（profile `obi` 有効時のみ） |
 ```
 
 - [ ] **Step 5: 「Grafana データソース」の表の Tempo 行の Explore クエリ例を補足する**
@@ -656,9 +890,9 @@ Tempo 行の末尾セルを `{resource.service.name="frontend"}`（OBI 有効時
 
 Run:
 ```bash
-grep -n "^## OBI 設定\|^## OBI が生成するメトリクス\|^### obi サービス\|ebpf-instrument:v0.13.0\|./obi/config.yaml" docs/reference/configuration.md
+grep -n "^## OBI 設定\|^## OBI が生成するメトリクス\|^### obi サービス\|ebpf-instrument:v0.13.0\|^| \`./obi\` |" docs/reference/configuration.md && grep -c "OBI_EXCLUDE" docs/reference/configuration.md
 ```
-Expected: 5 行すべてが出力される
+Expected: 5 行が出力され、最後の数は `0`
 
 - [ ] **Step 7: コミット**
 
@@ -675,13 +909,13 @@ EOF
 
 ---
 
-### Task 6: ハウツー `docs/how-to/development.md` を更新する
+### Task 7: ハウツー `docs/how-to/development.md` を更新する
 
 **Files:**
 - Modify: `docs/how-to/development.md`
 
 **Interfaces:**
-- Consumes: Task 1 の名前
+- Consumes: Task 3 の名前（`OBI_CONFIG`、`config-compare.yaml`）
 - Produces: 見出し「OBI（eBPF 自動計装）を起動・停止する」
 
 - [ ] **Step 1: 「コンテナのログを確認する」の `docker compose logs -f grafana` の次の行に追加する**
@@ -711,23 +945,29 @@ docker compose --profile obi stop obi
 docker compose --profile obi down
 ```
 
+### 設定ファイルを切り替える（backend も OBI で計装する）
+
+```bash
+# 比較用の設定で再作成
+OBI_CONFIG=config-compare.yaml docker compose --profile obi up -d obi
+
+# 既定（nginx のみ）に戻す
+docker compose --profile obi up -d obi
+```
+
 ### `obi/config.yaml` を変更したとき
 
-設定ファイルはバインドマウントしているため、再起動で反映されます。
+設定ディレクトリはバインドマウントしているため、再起動で反映されます。
 
 ```bash
 docker compose --profile obi restart obi
 ```
 
-### SDK 計装済みの backend も OBI で計装する（比較用）
-
-```bash
-OBI_EXCLUDE_OTEL_INSTRUMENTED=false docker compose --profile obi up -d obi
-
-# 元に戻す
-docker compose --profile obi up -d obi
-```
+> **`stop` / `restart` が "PID ... is zombie" で失敗する場合**
+>
+> Docker Desktop と `pid: host` の組み合わせで起きる既知の現象で、`docker-compose.yml` では `stop_grace_period: 60s` で回避しています。それでも失敗したら数秒待って同じコマンドを再実行してください。残骸のコンテナは `docker rm -f $(docker ps -aq --filter name=obi)` で削除できます。
 ````
+
 - [ ] **Step 3: 「環境を完全にリセットする」のコマンドを profile 対応にする**
 
 ```bash
@@ -745,16 +985,16 @@ docker compose up --build
 
 Run:
 ```bash
-grep -n "^## OBI\|logs -f obi\|--profile obi down -v" docs/how-to/development.md && test -f docs/tutorials/zero-code-obi.md && echo link-ok
+grep -n "^## OBI\|logs -f obi\|--profile obi down -v\|OBI_CONFIG=config-compare.yaml" docs/how-to/development.md && test -f docs/tutorials/zero-code-obi.md && echo link-ok
 ```
-Expected: 3 行と `link-ok`
+Expected: 4 行と `link-ok`
 
 - [ ] **Step 5: コミット**
 
 ```bash
 git add docs/how-to/development.md
 git commit -m "$(cat <<'EOF'
-docs: Phase 9 - 開発ガイドに OBI の起動・停止手順を追加
+docs: Phase 9 - 開発ガイドに OBI の起動・停止・設定切替手順を追加
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01E8thMHFf395nhkZrph6uzy
@@ -764,14 +1004,14 @@ EOF
 
 ---
 
-### Task 7: README と purpose.md を更新する
+### Task 8: README と purpose.md を更新する
 
 **Files:**
 - Modify: `README.md`
 - Modify: `docs/explanation/purpose.md`（「### やること」リスト）
 
 **Interfaces:**
-- Consumes: Task 3 のファイル名、Task 1 の profile 名
+- Consumes: Task 4 のファイル名、Task 3 の profile 名。Phase 9 のコミットハッシュは Task 1 のコミット `90a9e82`
 
 - [ ] **Step 1: README の ASCII 構成図を置き換える**
 
@@ -798,11 +1038,11 @@ docker compose --profile obi up
 
 - [ ] **Step 3: 「フェーズ構成」の表に行を追加する**
 
-Phase 8 の行がまだ無いので、8 と 9 を追加する。9 のコミットハッシュはこの Phase の最初のコミット（Task 1 のコミット）の短縮ハッシュを `git log --oneline` で確認して入れる。
+Phase 8 の行がまだ無いので、8 と 9 を追加する。
 
 ```markdown
 | 8 | [bb96283](https://github.com/hidekingerz/otel-practice-env/commit/bb96283) | ハンズオン計装練習 |
-| 9 | [<Task1のハッシュ>](https://github.com/hidekingerz/otel-practice-env/commit/<Task1のハッシュ>) | OBI による eBPF ゼロコード計装（nginx） |
+| 9 | [90a9e82](https://github.com/hidekingerz/otel-practice-env/commit/90a9e82) | OBI による eBPF ゼロコード計装（nginx） |
 ```
 
 - [ ] **Step 4: 「ドキュメント」の表にチュートリアル行を追加する**
@@ -842,23 +1082,26 @@ EOF
 
 ---
 
-### Task 8: 最終確認と PR 作成
+### Task 9: 最終確認と PR 作成
 
 **Files:** なし（検証のみ）
 
-- [ ] **Step 1: チュートリアルの手順どおりにクリーン起動で通しで確認する**
+- [ ] **Step 1: クリーン起動で通しで確認する（spec 6 章の条件 1, 2, 4, 6, 8）**
 
 Run:
 ```bash
-docker compose --profile obi down && docker compose --profile obi up -d --build && sleep 30
+docker compose --profile obi config >/dev/null && echo config-ok
+docker compose --profile obi down && docker compose --profile obi up -d --build && sleep 40
 docker compose ps --format '{{.Name}}\t{{.Status}}'
-for i in 1 2 3; do curl -s -o /dev/null http://localhost/api/todos; curl -s -o /dev/null http://localhost/api/todos/stats; done; sleep 20
-TEMPO_UID=$(curl -s http://localhost:3000/api/datasources | jq -r '.[] | select(.name=="Tempo") | .uid')
-curl -s "http://localhost:3000/api/datasources/proxy/uid/$TEMPO_UID/api/search?tags=service.name%3Dnginx&limit=3" | jq '.traces | length'
+docker compose logs obi | grep 'instrumenting process'
+TEMPO_UID=$(curl -s http://localhost:3000/api/datasources | jq -r '.[]|select(.name=="Tempo")|.uid')
+TID=$(openssl rand -hex 16); SID=$(openssl rand -hex 8)
+curl -s -o /dev/null -H "traceparent: 00-$TID-$SID-01" http://localhost/api/todos; sleep 25
+curl -s "http://localhost:3000/api/datasources/proxy/uid/$TEMPO_UID/api/traces/$TID" | jq -r '.batches[] | (.resource.attributes[] | select(.key=="service.name") | .value.stringValue) as $svc | .scopeSpans[].spans[] | "\($svc)\t\(.kind)\t\(.name)"'
 ```
-Expected: 6 コンテナが `Up`、最後の出力が `1` 以上
+Expected: `config-ok`、6 コンテナが `Up`、検出ログは nginx のみ、トレースに `nginx` と `backend` の span があり `backend-obi` は無い
 
-- [ ] **Step 2: profile なしの起動に影響がないことを確認する**
+- [ ] **Step 2: profile なしの起動に影響がないことを確認する（条件 6）**
 
 Run:
 ```bash
@@ -872,13 +1115,11 @@ Run:
 ```bash
 git status --short && git log --oneline main..HEAD
 ```
-Expected: 未コミット変更なし。spec、Task 1、Task 3〜7 のコミットが並ぶ
+Expected: 未コミット変更なし。spec、plan、Task 1、Task 3〜8 のコミットが並ぶ
 
 - [ ] **Step 4: ユーザーに確認のうえ push して PR を作成する**
 
 PR タイトル: `feat: Phase 9 - OBI による eBPF ゼロコード計装（nginx）`
-
-PR 本文の要点: 目的（OBI でコード変更なしに nginx をトレース）、変更点（`obi` サービスを profile で追加、`obi/config.yaml`、ドキュメント 6 ファイル）、確認方法（`docker compose --profile obi up` → Tempo で `nginx` を検索）、検証環境（Docker Desktop macOS / arm64）、末尾に `🤖 Generated with [Claude Code](https://claude.com/claude-code)` と `https://claude.ai/code/session_01E8thMHFf395nhkZrph6uzy`。
 
 ```bash
 git push -u origin phase/9-obi-zero-code
@@ -887,19 +1128,20 @@ gh pr create --title "feat: Phase 9 - OBI による eBPF ゼロコード計装�
 OBI（OpenTelemetry eBPF Instrumentation）を Compose profile `obi` で追加し、コード変更なしに nginx をトレースできるようにしました。
 
 ## 変更点
-- `docker-compose.yml`: `obi` サービス（`otel/ebpf-instrument:v0.13.0`、`pid: host`、`privileged`、profile `obi`）
-- `obi/config.yaml`: nginx(80) / backend(8080) の discovery、コンテキスト伝播、routes、OTLP エクスポート
+- `docker-compose.yml`: `obi` サービス（`otel/ebpf-instrument:v0.13.0`、`pid: host`、`privileged`、profile `obi`、`stop_grace_period: 60s`）
+- `obi/config.yaml`（nginx のみ）と `obi/config-compare.yaml`（nginx + backend）。`OBI_CONFIG` で切替
 - ドキュメント: チュートリアル新規（`docs/tutorials/zero-code-obi.md`）、解説・リファレンス・ハウツー・README・purpose を更新
+- 設計 spec と実装計画（`docs/superpowers/`）
 - アプリケーションコード、nginx.conf、Collector、Grafana は未変更
 
 ## 確認方法
 ```bash
 docker compose --profile obi up -d
-# Todo アプリを操作 → Grafana Explore > Tempo > Service Name = nginx
+# Todo アプリを操作 → Grafana Explore > Tempo > TraceQL: { resource.service.name = "nginx" }
 ```
 
-## 検証環境
-Docker Desktop（macOS / arm64）
+## 検証環境と既知の制約
+Docker Desktop（macOS / arm64）。このカーネルでは OBI の HTTP ヘッダー注入が無効化されるため、nginx と backend のスパンは兄弟として並びます。詳細は spec の 9 章を参照。
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
