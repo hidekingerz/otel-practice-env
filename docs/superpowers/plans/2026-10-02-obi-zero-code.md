@@ -692,7 +692,7 @@ docker compose logs -f obi          # OBI（profile obi で起動している場
 
 - [ ] **Step 2: 「OTel Collector の設定を変更・検証する」節の直前に節を追加する**
 
-```markdown
+````markdown
 ## OBI（eBPF 自動計装）を起動・停止する
 
 OBI は特権コンテナのため Compose の profile `obi` でオプトインになっています。詳しい手順は [ゼロコード計装チュートリアル](../tutorials/zero-code-obi.md) を参照してください。
@@ -727,8 +727,7 @@ OBI_EXCLUDE_OTEL_INSTRUMENTED=false docker compose --profile obi up -d obi
 # 元に戻す
 docker compose --profile obi up -d obi
 ```
-```
-
+````
 - [ ] **Step 3: 「環境を完全にリセットする」のコマンドを profile 対応にする**
 
 ```bash
