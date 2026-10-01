@@ -1,0 +1,37 @@
+# OBI (OpenTelemetry eBPF Instrumentation) の設定
+# 参考: https://opentelemetry.io/ja/docs/zero-code/obi/
+
+discovery:
+  instrument:
+    # SDK を入れられない nginx（frontend コンテナ）。OBI だけで可視化する主役
+    - name: nginx
+      open_ports: 80
+    # 比較演習用。backend は OTel SDK で OTLP を送信しているため、
+    # 下の exclude_otel_instrumented_services が true の間は OBI が自動的に抑止する
+    - name: backend-obi
+      open_ports: 8080
+  # OTLP を送信しているプロセス（= SDK 計装済み）を OBI の計装対象から外す（既定 true）。
+  # OBI_EXCLUDE_OTEL_INSTRUMENTED=false にすると backend-obi のテレメトリが出る
+  exclude_otel_instrumented_services: ${OBI_EXCLUDE_OTEL_INSTRUMENTED:-true}
+
+ebpf:
+  # 送信パケットの traceparent を OBI が書き換え、nginx の client span を
+  # backend の親にする。既定は無効（その場合 nginx と backend は兄弟になる）
+  context_propagation: all
+
+routes:
+  # http.route を低カーディナリティに保つためのパターン
+  patterns:
+    - /api/todos/stats
+    - /api/todos/:id
+    - /api/todos
+  # パターンに一致しないパスはそのまま http.route にする
+  unmatched: path
+
+otel_traces_export:
+  endpoint: http://otel-collector:4318
+
+otel_metrics_export:
+  endpoint: http://otel-collector:4318
+  # 既定 60s だと確認に待たされるため短縮
+  interval: 15s

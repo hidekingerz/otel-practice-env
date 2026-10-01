@@ -77,6 +77,27 @@ services:
     networks:
       - otel-network
 
+  # Phase 9: OBI (eBPF 自動計装)。`docker compose --profile obi up` でのみ起動する
+  obi:
+    image: otel/ebpf-instrument:v0.13.0
+    container_name: obi
+    profiles: ["obi"]
+    command: ["--config=/config/config.yaml"]
+    # eBPF でホスト上の他コンテナのプロセスを観測するために必須
+    pid: host
+    privileged: true
+    environment:
+      # false にすると SDK 計装済みの backend も OBI の計装対象になる（比較演習用）
+      OBI_EXCLUDE_OTEL_INSTRUMENTED: ${OBI_EXCLUDE_OTEL_INSTRUMENTED:-true}
+    volumes:
+      - ./obi/config.yaml:/config/config.yaml:ro
+    depends_on:
+      - otel-collector
+      - frontend
+      - backend
+    networks:
+      - otel-network
+
 volumes:
   grafana-data:
   mariadb-data:
