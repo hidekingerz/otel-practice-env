@@ -7,13 +7,13 @@ OpenTelemetry (OTel) の3シグナル（トレース・メトリクス・ログ�
 ```
 Browser (React)
     │  OTLP/HTTP (traces, metrics, logs)
-    │                    ┌──────────────────────────────────┐
-    ▼                    │  grafana/otel-lgtm               │
- nginx:80 ──/api──► backend:8080 ──OTLP/gRPC──► OTel       │  Tempo  (traces)
-    ▲                │              Collector    Collector ──► Mimir  (metrics)
-    │ eBPF           ▼                 ▲         │                  │  Loki   (logs)
-    │             MariaDB              │         └──────────────────┘
- OBI (profile: obi) ──OTLP/HTTP────────┘
+    ▼
+ nginx:80 ──/api──► backend:8080 ──OTLP/gRPC──► OTel Collector ──► ┌──────────────────────────┐
+    ▲                   │                              ▲           │ grafana/otel-lgtm        │
+    │ eBPF              ▼                              │           │   Tempo  (traces)        │
+    │                MariaDB                           │           │   Mimir  (metrics)       │
+ OBI (profile: obi) ──OTLP/HTTP────────────────────────┘           │   Loki   (logs)          │
+                                                                   └──────────────────────────┘
 ```
 
 ## 起動方法
@@ -30,6 +30,9 @@ docker compose --profile obi up
 
 # 停止
 docker compose down
+
+# 停止（OBI を起動していた場合）
+docker compose --profile obi down
 ```
 
 ### アクセス先
@@ -58,7 +61,6 @@ Grafana（http://localhost:3000）を開くと **"OTel Practice - Overview"** �
 | 6 | [3e43b87](https://github.com/hidekingerz/otel-practice-env/commit/3e43b87) | 手動計装・メトリクス・ログ |
 | 7 | [13d8e9a](https://github.com/hidekingerz/otel-practice-env/commit/13d8e9a) | Grafana ダッシュボード・仕上げ |
 | 8 | [bb96283](https://github.com/hidekingerz/otel-practice-env/commit/bb96283) | ハンズオン計装練習 |
-| 9 | [90a9e82](https://github.com/hidekingerz/otel-practice-env/commit/90a9e82) | OBI による eBPF ゼロコード計装（nginx） |
 
 ## ドキュメント
 

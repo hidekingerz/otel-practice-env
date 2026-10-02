@@ -7,7 +7,7 @@
 ## 前提条件
 
 - [はじめてみよう](getting-started.md) を完了していること
-- Docker Desktop（macOS / Windows）または Linux カーネル 5.17 以降の Docker 環境
+- Docker Desktop（macOS / Windows）または Linux カーネル 5.8 以降（BTF 有効）の Docker 環境
 - `docker compose up` でスタックが起動していること
 
 ## OBI とは
@@ -55,7 +55,7 @@ docker compose logs obi | grep "instrumenting process"
 2. データソースに「Tempo」を選ぶ
 3. 「TraceQL」タブで `{ resource.service.name = "nginx" }` を入力して「Run query」を押す
 
-`GET /api/todos` のようなトレースが一覧に出てきましたか？ 1 つ開いてウォーターフォールを見てください。OBI のスパン名は `メソッド ルート`（例: `GET /api/todos`）の形式です。
+`frontend` を root とするトレース（ルートスパンはブラウザの fetch）と、`nginx` を root とする `GET /`（静的ファイル配信）のトレースが一覧に出てきましたか？ `/api/todos` を含むトレースを 1 つ開いてウォーターフォールを見てください。OBI のスパン名は `メソッド ルート`（例: `GET /api/todos`）の形式です。
 
 ```
 frontend   HTTP GET /api/todos               ← ブラウザ（OTel JS SDK）
@@ -63,8 +63,8 @@ frontend   HTTP GET /api/todos               ← ブラウザ（OTel JS SDK）
 │  ├─ nginx  processing    (INTERNAL)        ← nginx 内部の処理時間
 │  │  └─ nginx  GET /api/todos  (CLIENT)     ← nginx → backend の送信を OBI が観測
 │  └─ nginx  in queue      (INTERNAL)        ← nginx 内部の待ち時間
-└─ backend GET /api/todos                    ← Go（OTel Go SDK）
-   └─ backend SELECT ...                     ← otelsql
+└─ backend  backend (server)                  ← Go（OTel Go SDK, otelhttp）
+   └─ backend  sql.conn.query / sql.rows      ← otelsql
 ```
 
 これまで `frontend` の直下に `backend` だけがあったトレースに、nginx のスパンが加わりました。nginx のコードも設定も触っていないのに、分散トレースの一部になっています。
@@ -108,7 +108,7 @@ OBI_CONFIG=config-compare.yaml docker compose --profile obi up -d obi
 docker compose logs obi | grep "instrumenting process"
 ```
 
-Tempo の TraceQL で `{ resource.service.name = "backend-obi" }` を検索し、トレースを 1 つ開いてください。ブラウザのスパンの下に、nginx の server span、backend（SDK）の server span、backend-obi（OBI）の server span が兄弟として並び、backend-obi の下には `processing` / `in queue` と DB クエリのスパン（`SELECT todos` など）が続いています。
+Tempo の TraceQL で `{ resource.service.name = "backend-obi" && kind = server }` を検索し、トレースを 1 つ開いてください。`kind = server` を付けているのは、backend 自身が Collector へ OTLP を送る gRPC 呼び出しも OBI が client span として記録するため、それを除いて HTTP リクエストのトレースだけを一覧するためです。ブラウザのスパンの下に、nginx の server span、backend（SDK）の server span、backend-obi（OBI）の server span が兄弟として並び、backend-obi の下には `processing` / `in queue` と DB クエリのスパン（`SELECT todos` など）が続いています。
 
 同じリクエストが SDK と OBI で二重に計装され、同じトレース内に `backend` と `backend-obi` が並んで見えます。（curl のように `traceparent` が無い場合は、`backend-obi` が nginx の client span の下に入り、SDK の `backend` は別トレースになります。）
 
@@ -118,7 +118,7 @@ Tempo の TraceQL で `{ resource.service.name = "backend-obi" }` を検索し�
 | `todo.List` のような名前付きの内部スパン | あり | **なし** |
 | `todo.total` のような手動で付けた属性 | あり | **なし** |
 | DB クエリのスパン | あり（`otelsql`） | あり（`SELECT todos` など。MySQL プロトコルを eBPF で解析） |
-| `GET /api/todos/stats`（[ハンズオン](hands-on-instrumentation.md) の未計装 API） | HTTP スパンのみ | HTTP スパンと SQL スパンが**何もしなくても**見える |
+| `GET /api/todos/stats`（[ハンズオン](hands-on-instrumentation.md) の未計装 API） | HTTP スパンと otelsql の SQL スパン。名前付きスパン `todo.Stats` や属性は[ハンズオン](hands-on-instrumentation.md)で追加するまで無い | 何もしなくても HTTP スパンと SQL スパンが見える（名前付きスパンや属性は付かない） |
 | ログ | あり | なし（OBI はトレースとメトリクスのみ） |
 
 OBI は「何も書かなくてもプロトコル境界は全部見える」代わりに、「コードの意図（この処理は何をしているのか）」は見えません。SDK はその逆です。実務では、OBI でカバレッジを確保しつつ、重要な処理は SDK で深掘りする、という組み合わせが現実的です。
@@ -163,9 +163,9 @@ OBI は `privileged: true` と `pid: host` を必要とします。Docker Deskto
 
 Docker Desktop と `pid: host` の組み合わせで起きる既知の現象です。`docker-compose.yml` の `obi` サービスには回避のため `stop_grace_period: 60s` を設定しています。それでも失敗した場合は、数秒待ってから同じコマンドをもう一度実行してください。`<ハッシュ>_obi` という名前のコンテナが残った場合は `docker rm -f` で削除できます。
 
-### `backend-obi` のスパンに `/containerd.services...` のようなものが混ざる
+### `nginx` や `backend-obi` のスパンに `/containerd.services...` のようなものが混ざる
 
-Docker Desktop では公開ポートを VM 内の `dockerd` も開いているため、`open_ports` だけで対象を指定すると `dockerd` まで計装されます。本プロジェクトの設定では `exe_path` を併用して除外しています。`obi/config.yaml` を変更した場合は `exe_path` が残っているか確認してください。
+Docker Desktop の `dockerd` も公開ポートを開いているため、`open_ports` だけでは `dockerd` まで計装されます。`obi/config.yaml` と `obi/config-compare.yaml` では `exe_path` を併用して除外しています。どちらかを変更した場合は `exe_path` が残っているか確認してください。
 
 ## チュートリアル完了
 

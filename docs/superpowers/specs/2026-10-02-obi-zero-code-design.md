@@ -151,10 +151,11 @@ docker compose --profile obi up -d obi
 ```
 frontend   HTTP GET /api/todos               ← ブラウザ（OTel JS SDK）
 ├─ nginx   GET /api/todos (server)           ← OBI
-│  ├─ nginx  in queue / processing (internal)
-│  └─ nginx  GET /api/todos (client)         ← nginx → backend の送信
-└─ backend GET /api/todos                    ← Go（OTel Go SDK）
-   └─ backend SELECT ...                     ← otelsql
+│  ├─ nginx  processing (internal)
+│  │  └─ nginx  GET /api/todos (client)      ← nginx → backend の送信
+│  └─ nginx  in queue (internal)
+└─ backend  backend (server)                  ← Go（OTel Go SDK, otelhttp）
+   └─ backend  sql.conn.query / sql.rows      ← otelsql
 ```
 
 比較演習（`config-compare.yaml`）では `backend-obi` の server span と SQL client span も同じトレースに兄弟として加わる。`traceparent` の無い直接リクエスト（curl 等）では `backend-obi` が nginx の client span の下にぶら下がる（TCP レベル伝播）。
@@ -167,7 +168,7 @@ frontend   HTTP GET /api/todos               ← ブラウザ（OTel JS SDK）
 | 名前付きの内部 span（`todo.List` 等） | あり | なし（コードの意図は見えない） |
 | 手動属性（`todo.total` 等） | あり | なし |
 | DB クエリ span | `otelsql` による | MySQL プロトコルを eBPF で解析した client span（`SELECT todos` 等） |
-| Phase 8 の未計装 `GET /api/todos/stats` | HTTP span のみ | 何もしなくても HTTP span と SQL span が見える |
+| Phase 8 の未計装 `GET /api/todos/stats` | HTTP span と otelsql の SQL span。名前付き span `todo.Stats` や属性はハンズオンで追加するまで無い | 何もしなくても HTTP span と SQL span が見える（名前付き span や属性は付かない） |
 | ログ | OTLP ログあり | なし（OBI はトレース・メトリクスのみ） |
 
 着地点: 「どちらか」ではなく、OBI で広くカバレッジを確保し、重要な箇所を SDK で深掘りする使い分け。

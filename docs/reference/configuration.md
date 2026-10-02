@@ -173,8 +173,8 @@ OBI は OTel セマンティック規約に沿った名前でメトリクスを�
 | `http_client_request_duration_seconds_{bucket,count,sum}` | ヒストグラム | `nginx` | `http_request_method`, `http_response_status_code`, `server_address` |
 | `http_client_request_body_size_bytes_{bucket,count,sum}` | ヒストグラム | `nginx` | 同上 |
 | `http_client_response_body_size_bytes_{bucket,count,sum}` | ヒストグラム | `nginx` | 同上 |
-| `db_client_operation_duration_seconds_{bucket,count,sum}` | ヒストグラム | `backend-obi` | `db_system_name`, `db_operation_name`, `db_collection_name` |
-| `rpc_client_call_duration_seconds_{bucket,count,sum}` | ヒストグラム | `backend-obi` | `rpc_service`, `rpc_method`（backend 自身の OTLP gRPC エクスポート呼び出し） |
+| `db_client_operation_duration_seconds_{bucket,count,sum}` | ヒストグラム | `backend-obi` | `db_system_name`, `db_operation_name` |
+| `rpc_client_call_duration_seconds_{bucket,count,sum}` | ヒストグラム | `backend-obi` | `rpc_method`, `server_address`（backend 自身の OTLP gRPC エクスポート呼び出し） |
 | `target_info` | 情報 | すべて | リソース属性（`telemetry_distro_name` 等） |
 
 Explore クエリ例: `rate(http_server_request_duration_seconds_count{service_name="nginx"}[5m])`
