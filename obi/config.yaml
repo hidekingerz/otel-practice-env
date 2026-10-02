@@ -1,22 +1,20 @@
-# OBI (OpenTelemetry eBPF Instrumentation) の設定
+# OBI (OpenTelemetry eBPF Instrumentation) の設定（既定: nginx のみを計装）
 # 参考: https://opentelemetry.io/ja/docs/zero-code/obi/
+# backend も OBI で計装して比較するときは config-compare.yaml を使う
 
 discovery:
   instrument:
-    # SDK を入れられない nginx（frontend コンテナ）。OBI だけで可視化する主役
+    # SDK を入れられない nginx（frontend コンテナ）。OBI だけで可視化する主役。
+    # Docker Desktop では公開ポートを VM 内の dockerd も開いているため、
+    # ポートだけでなく実行ファイル名でも絞る
     - name: nginx
       open_ports: 80
-    # 比較演習用。backend は OTel SDK で OTLP を送信しているため、
-    # 下の exclude_otel_instrumented_services が true の間は OBI が自動的に抑止する
-    - name: backend-obi
-      open_ports: 8080
-  # OTLP を送信しているプロセス（= SDK 計装済み）を OBI の計装対象から外す（既定 true）。
-  # OBI_EXCLUDE_OTEL_INSTRUMENTED=false にすると backend-obi のテレメトリが出る
-  exclude_otel_instrumented_services: ${OBI_EXCLUDE_OTEL_INSTRUMENTED:-true}
+      exe_path: "*nginx*"
 
 ebpf:
-  # 送信パケットの traceparent を OBI が書き換え、nginx の client span を
-  # backend の親にする。既定は無効（その場合 nginx と backend は兄弟になる）
+  # 送信パケットの traceparent を OBI が書き換え、下流の span を親子にする（既定は無効）。
+  # Docker Desktop のカーネルでは HTTP ヘッダ注入が無効化され起動時に ERROR ログが出るが、
+  # OBI 同士の TCP レベル伝播は機能する
   context_propagation: all
 
 routes:

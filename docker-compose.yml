@@ -82,15 +82,15 @@ services:
     image: otel/ebpf-instrument:v0.13.0
     container_name: obi
     profiles: ["obi"]
-    command: ["--config=/config/config.yaml"]
+    # 比較演習では OBI_CONFIG=config-compare.yaml を指定する
+    command: ["--config=/config/${OBI_CONFIG:-config.yaml}"]
     # eBPF でホスト上の他コンテナのプロセスを観測するために必須
     pid: host
     privileged: true
-    environment:
-      # false にすると SDK 計装済みの backend も OBI の計装対象になる（比較演習用）
-      OBI_EXCLUDE_OTEL_INSTRUMENTED: ${OBI_EXCLUDE_OTEL_INSTRUMENTED:-true}
+    # Docker Desktop では停止時に "PID is zombie" エラーが出るため、終了を待つ猶予を長めに取る
+    stop_grace_period: 60s
     volumes:
-      - ./obi/config.yaml:/config/config.yaml:ro
+      - ./obi:/config:ro
     depends_on:
       - otel-collector
       - frontend
