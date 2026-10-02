@@ -43,7 +43,7 @@ docker compose logs obi | grep "instrumenting process"
 
 > **起動時に `ERROR ... context propagation is disabled` と出る**
 >
-> Docker Desktop のカーネルでは、OBI が HTTP ヘッダーに `traceparent` を書き込む機能が無効化され、このような ERROR ログが出ます。ただし実際には OBI が観測した nginx と backend のスパンは親子関係で繋がり、伝搬は機能しています。ログではなく Tempo のスパンで確認してください。nginx のスパンとメトリクスも問題なく取得できます。
+> ヘッダー注入が無効なため、nginx は backend へ OBI の traceparent を書き込めません。ブラウザ起点では nginx と backend は兄弟になります（Step 3）。この ERROR は機能が実際に無効であることを示しています。nginx のスパンとメトリクスは問題なく取得できます。
 
 ## Step 2: Todo アプリを操作する
 
@@ -63,16 +63,15 @@ frontend   HTTP GET /api/todos               ← ブラウザ（OTel JS SDK）
 │  ├─ nginx  processing    (INTERNAL)        ← nginx 内部の処理時間
 │  │  └─ nginx  GET /api/todos  (CLIENT)     ← nginx → backend の送信を OBI が観測
 │  └─ nginx  in queue      (INTERNAL)        ← nginx 内部の待ち時間
-└─ backend ...                               ← Go（OTel Go SDK）のスパン
+└─ backend GET /api/todos                    ← Go（OTel Go SDK）
+   └─ backend SELECT ...                     ← otelsql
 ```
 
 これまで `frontend` の直下に `backend` だけがあったトレースに、nginx のスパンが加わりました。nginx のコードも設定も触っていないのに、分散トレースの一部になっています。
 
 > **nginx と backend が親子ではなく兄弟に並ぶ理由**
 >
-> nginx はブラウザから受け取った `traceparent` ヘッダーをそのまま backend に転送します。OBI は nginx のスパンをこの `traceparent` の子として作り、backend の SDK も同じ `traceparent` の子としてスパンを作るため、両者は兄弟になります。
->
-> `obi/config.yaml` の `ebpf.context_propagation: all` により、OBI で計装された同士（nginx の client span と、Step 5 で OBI 計装する backend-obi の server span）は親子になります。一方、SDK で計装された backend は OBI が付け替えた親を引き継がないため、nginx の下にはぶら下がりません。
+> この環境ではカーネルの問題で OBI の HTTP ヘッダー注入が無効（Step 1 の ERROR）なため、nginx は backend に自分の span ID を伝えられません。backend には常にブラウザの traceparent が届くので、SDK の backend も Step 5 の backend-obi も兄弟になります。traceparent の無い curl などの直接リクエストでは OBI 同士の TCP レベル伝播が効き、backend-obi が nginx の client span の下にぶら下がります。ヘッダー注入が効くカーネルでは backend が nginx の下にぶら下がります。
 
 ## Step 4: Prometheus で nginx の RED メトリクスを確認する
 
@@ -109,9 +108,9 @@ OBI_CONFIG=config-compare.yaml docker compose --profile obi up -d obi
 docker compose logs obi | grep "instrumenting process"
 ```
 
-Tempo の TraceQL で `{ resource.service.name = "backend-obi" }` を検索し、トレースを 1 つ開いてください。nginx の client span の下に `backend-obi` の server span（`GET /api/todos` など）が親子でぶら下がり、その下に `processing` / `in queue` と DB クエリのスパン（`SELECT todos` など）が続いているはずです。
+Tempo の TraceQL で `{ resource.service.name = "backend-obi" }` を検索し、トレースを 1 つ開いてください。ブラウザのスパンの下に、nginx の server span、backend（SDK）の server span、backend-obi（OBI）の server span が兄弟として並び、backend-obi の下には `processing` / `in queue` と DB クエリのスパン（`SELECT todos` など）が続いています。
 
-一方、SDK で計装された `backend` のスパンは、OBI の `traceparent` を引き継がないため、`backend-obi` とは**別のトレース**になります。同じリクエストが SDK と OBI で二重に計装され、トレースが 2 本に分かれて見える点に注意してください。`{ resource.service.name = "backend" }` で SDK 側のトレースを検索して見比べてみましょう。
+同じリクエストが SDK と OBI で二重に計装され、同じトレース内に `backend` と `backend-obi` が並んで見えます。（curl のように `traceparent` が無い場合は、`backend-obi` が nginx の client span の下に入り、SDK の `backend` は別トレースになります。）
 
 | 観点 | `backend`（OTel Go SDK） | `backend-obi`（OBI） |
 |---|---|---|
@@ -126,7 +125,7 @@ OBI は「何も書かなくてもプロトコル境界は全部見える」代�
 
 > **OBI の「SDK 計装済みサービスの自動除外」について**
 >
-> OBI には、OTLP を送信しているプロセスを検知して自分の計装を抑止する機能（`discovery.exclude_otel_instrumented_services`、既定で有効）があります。ただしこの環境の backend では、この機能が効かず `backend-obi` のスパンとメトリクスが出ることを確認しました。そのため本プロジェクトでは、OBI の対象を設定ファイルで明示的に分けています。
+> OBI には、OTLP を送信しているプロセスを検知して自分の計装を抑止する機能（`discovery.exclude_otel_instrumented_services`、既定で有効）があります。ただしこの環境の backend は全シグナルを単一の gRPC エンドポイントへ送信するため、検知が発火せず `backend-obi` のスパンとメトリクスが出ます。そのため `obi/config-compare.yaml` では `exclude_otel_instrumented_services: false` を明示し、OBI の対象を設定ファイルで分けています。
 
 確認が終わったら既定の設定に戻します。
 
