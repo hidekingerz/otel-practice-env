@@ -13,7 +13,7 @@ discovery:
 
 ebpf:
   # 送信パケットの traceparent を OBI が書き換え、下流の span を親子にする（既定は無効）。
-  # Docker Desktop のカーネルでは HTTP ヘッダ注入が無効化され起動時に ERROR ログが出るが、
+  # Docker Desktop のカーネルでは HTTP ヘッダー注入が無効化され起動時に ERROR ログが出るが、
   # OBI 同士の TCP レベル伝播は機能する
   context_propagation: all
 
