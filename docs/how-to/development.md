@@ -43,9 +43,50 @@ docker compose logs -f backend
 docker compose logs -f frontend
 docker compose logs -f otel-collector
 docker compose logs -f grafana
+docker compose logs -f obi          # OBI（profile obi で起動している場合）
 ```
 
 エラーが発生した場合はまずここを確認してください。
+
+## OBI（eBPF 自動計装）を起動・停止する
+
+OBI は特権コンテナのため Compose の profile `obi` でオプトインになっています。詳しい手順は [ゼロコード計装チュートリアル](../tutorials/zero-code-obi.md) を参照してください。
+
+```bash
+# スタック全体 + OBI を起動
+docker compose --profile obi up -d
+
+# すでにスタックが起動している状態で OBI だけ追加起動
+docker compose --profile obi up -d obi
+
+# OBI だけ停止
+docker compose --profile obi stop obi
+
+# OBI を含めてすべて停止（--profile を付けないと obi コンテナが残る）
+docker compose --profile obi down
+```
+
+### 設定ファイルを切り替える（backend も OBI で計装する）
+
+```bash
+# 比較用の設定で再作成
+OBI_CONFIG=config-compare.yaml docker compose --profile obi up -d obi
+
+# 既定（nginx のみ）に戻す
+docker compose --profile obi up -d obi
+```
+
+### `obi/config.yaml` を変更したとき
+
+設定ディレクトリはバインドマウントしているため、再起動で反映されます。
+
+```bash
+docker compose --profile obi restart obi
+```
+
+> **`stop` / `restart` が "PID ... is zombie" で失敗する場合**
+>
+> Docker Desktop と `pid: host` の組み合わせで起きる既知の現象で、`docker-compose.yml` では `stop_grace_period: 60s` で回避しています。それでも失敗したら数秒待って同じコマンドを再実行してください。残骸のコンテナは `docker rm -f $(docker ps -aq --filter name=obi)` で削除できます。
 
 ## OTel Collector の設定を変更・検証する
 
@@ -89,8 +130,8 @@ docker compose up --build backend
 データをすべて削除して最初からやり直すには以下を実行します。
 
 ```bash
-docker compose down -v
+docker compose --profile obi down -v
 docker compose up --build
 ```
 
-`-v` フラグを付けると名前付きボリューム（MariaDB データ、Grafana データ）も削除されます。
+`-v` フラグを付けると名前付きボリューム（MariaDB データ、Grafana データ）も削除されます。`--profile obi` を付けているのは、OBI を起動していた場合にそのコンテナも確実に削除するためです（起動していなくても害はありません）。

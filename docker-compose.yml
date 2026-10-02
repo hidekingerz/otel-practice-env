@@ -77,6 +77,27 @@ services:
     networks:
       - otel-network
 
+  # Phase 9: OBI (eBPF 自動計装)。`docker compose --profile obi up` でのみ起動する
+  obi:
+    image: otel/ebpf-instrument:v0.13.0
+    container_name: obi
+    profiles: ["obi"]
+    # 比較演習では OBI_CONFIG=config-compare.yaml を指定する
+    command: ["--config=/config/${OBI_CONFIG:-config.yaml}"]
+    # eBPF でホスト上の他コンテナのプロセスを観測するために必須
+    pid: host
+    privileged: true
+    # Docker Desktop では停止時に "PID is zombie" エラーが出るため、終了を待つ猶予を長めに取る
+    stop_grace_period: 60s
+    volumes:
+      - ./obi:/config:ro
+    depends_on:
+      - otel-collector
+      - frontend
+      - backend
+    networks:
+      - otel-network
+
 volumes:
   grafana-data:
   mariadb-data:

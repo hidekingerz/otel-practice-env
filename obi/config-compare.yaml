@@ -1,0 +1,34 @@
+# OBI の設定（比較演習: nginx に加えて Go backend も OBI で計装する）
+# config.yaml との差分は discovery セクションだけ
+
+discovery:
+  instrument:
+    - name: nginx
+      open_ports: 80
+      exe_path: "*nginx*"
+    # OTel SDK で計装済みの backend を、あえて OBI でも計装する。
+    # service.name を backend-obi にして SDK 由来（backend）と見分ける
+    - name: backend-obi
+      open_ports: 8080
+      exe_path: "*/app/server*"
+  # OBI には「OTLP を送信しているプロセスを自動で除外する」機能がある（既定 true）が、
+  # backend のように単一の gRPC エンドポイントへ全シグナルを送る構成では検知が発火しない。
+  # 比較演習の挙動を環境に依らず固定するため明示的に無効化する
+  exclude_otel_instrumented_services: false
+
+ebpf:
+  context_propagation: all
+
+routes:
+  patterns:
+    - /api/todos/stats
+    - /api/todos/:id
+    - /api/todos
+  unmatched: path
+
+otel_traces_export:
+  endpoint: http://otel-collector:4318
+
+otel_metrics_export:
+  endpoint: http://otel-collector:4318
+  interval: 15s

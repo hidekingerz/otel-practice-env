@@ -7,12 +7,13 @@ OpenTelemetry (OTel) の3シグナル（トレース・メトリクス・ログ�
 ```
 Browser (React)
     │  OTLP/HTTP (traces, metrics, logs)
-    │                    ┌──────────────────────────────────┐
-    ▼                    │  grafana/otel-lgtm               │
- nginx:80 ──/api──► backend:8080 ──OTLP/gRPC──► OTel       │  Tempo  (traces)
-                    │              Collector    Collector ──► Mimir  (metrics)
-                    ▼                    │                  │  Loki   (logs)
-                 MariaDB                 └──────────────────┘
+    ▼
+ nginx:80 ──/api──► backend:8080 ──OTLP/gRPC──► OTel Collector ──► ┌──────────────────────────┐
+    ▲                   │                              ▲           │ grafana/otel-lgtm        │
+    │ eBPF              ▼                              │           │   Tempo  (traces)        │
+    │                MariaDB                           │           │   Mimir  (metrics)       │
+ OBI (profile: obi) ──OTLP/HTTP────────────────────────┘           │   Loki   (logs)          │
+                                                                   └──────────────────────────┘
 ```
 
 ## 起動方法
@@ -24,8 +25,14 @@ docker compose up --build
 # 2回目以降
 docker compose up
 
+# Phase 9: OBI（eBPF 自動計装）も起動する場合
+docker compose --profile obi up
+
 # 停止
 docker compose down
+
+# 停止（OBI を起動していた場合）
+docker compose --profile obi down
 ```
 
 ### アクセス先
@@ -53,6 +60,7 @@ Grafana（http://localhost:3000）を開くと **"OTel Practice - Overview"** �
 | 5 | [8b3774b](https://github.com/hidekingerz/otel-practice-env/commit/8b3774b) | React + OTel JS SDK・分散トレーシング |
 | 6 | [3e43b87](https://github.com/hidekingerz/otel-practice-env/commit/3e43b87) | 手動計装・メトリクス・ログ |
 | 7 | [13d8e9a](https://github.com/hidekingerz/otel-practice-env/commit/13d8e9a) | Grafana ダッシュボード・仕上げ |
+| 8 | [bb96283](https://github.com/hidekingerz/otel-practice-env/commit/bb96283) | ハンズオン計装練習 |
 
 ## ドキュメント
 
@@ -60,6 +68,7 @@ Grafana（http://localhost:3000）を開くと **"OTel Practice - Overview"** �
 |---|---|---|
 | チュートリアル | [はじめてみよう](docs/tutorials/getting-started.md) | 環境起動から Grafana で3シグナル確認まで |
 | チュートリアル | [ハンズオン：計装を追加する](docs/tutorials/hands-on-instrumentation.md) | 自分でスパン・メトリクス・ログを追加する練習 |
+| チュートリアル | [ゼロコード計装：OBI で nginx をトレースする](docs/tutorials/zero-code-obi.md) | eBPF 自動計装でコード変更なしに nginx をトレースし、SDK 計装と比較する |
 | ハウツー | [開発ガイド](docs/how-to/development.md) | ローカル開発・ログ確認・設定変更の手順 |
 | リファレンス | [設定リファレンス](docs/reference/configuration.md) | ポート・環境変数・API・Collector 設定の一覧 |
 | 解説 | [プロジェクト目的](docs/explanation/purpose.md) | 背景・学習ゴール・スコープ |

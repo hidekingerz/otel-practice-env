@@ -1,0 +1,35 @@
+# OBI (OpenTelemetry eBPF Instrumentation) の設定（既定: nginx のみを計装）
+# 参考: https://opentelemetry.io/ja/docs/zero-code/obi/
+# backend も OBI で計装して比較するときは config-compare.yaml を使う
+
+discovery:
+  instrument:
+    # SDK を入れられない nginx（frontend コンテナ）。OBI だけで可視化する主役。
+    # Docker Desktop では公開ポートを VM 内の dockerd も開いているため、
+    # ポートだけでなく実行ファイル名でも絞る
+    - name: nginx
+      open_ports: 80
+      exe_path: "*nginx*"
+
+ebpf:
+  # 送信パケットの traceparent を OBI が書き換え、下流の span を親子にする（既定は無効）。
+  # Docker Desktop のカーネルでは HTTP ヘッダー注入が無効化され起動時に ERROR ログが出るが、
+  # OBI 同士の TCP レベル伝播は機能する
+  context_propagation: all
+
+routes:
+  # http.route を低カーディナリティに保つためのパターン
+  patterns:
+    - /api/todos/stats
+    - /api/todos/:id
+    - /api/todos
+  # パターンに一致しないパスはそのまま http.route にする
+  unmatched: path
+
+otel_traces_export:
+  endpoint: http://otel-collector:4318
+
+otel_metrics_export:
+  endpoint: http://otel-collector:4318
+  # 既定 60s だと確認に待たされるため短縮
+  interval: 15s
